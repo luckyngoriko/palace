@@ -370,9 +370,9 @@ Sample configurations are provided in the
 [`examples/pml_waveguide`](https://github.com/awslabs/palace/blob/main/examples/pml_waveguide),
 [`examples/pml_layered`](https://github.com/awslabs/palace/blob/main/examples/pml_layered),
 and [`examples/pml_oblique`](https://github.com/awslabs/palace/blob/main/examples/pml_oblique)
-directories: a rectangular waveguide terminated by a PML (driven simulations, also with a
-PML extruded from its end, eigenmode simulations of a cavity coupled to the waveguide
-through an iris, and an E-plane bifurcation whose arms of different lengths are terminated
+directories: a rectangular waveguide terminated by a PML (driven simulations, eigenmode
+simulations of a cavity coupled to the waveguide through an iris, and an E-plane
+bifurcation whose arms of different lengths are terminated
 by two PML blocks), a layered substrate and vacuum parallel-plate waveguide whose material
 interface crosses the PML, and a periodic cell with a Floquet port for plane-wave absorption
 at oblique incidence (at grazing incidence, and with an adaptive sweep at 45°).
