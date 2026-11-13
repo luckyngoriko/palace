@@ -109,10 +109,8 @@ Stretch BuildStretch(const config::PMLData &data, const LayerGeometry &geometry,
     }
   }
   stretch.kappa_max = data.kappa_max;
-  stretch.alpha_max = data.alpha_max;
   stretch.order = data.order;
-  stretch.frequency_dependent = data.frequency_dependent;
-  stretch.reference_frequency = data.frequency_dependent ? 0.0 : data.reference_frequency;
+  stretch.reference_frequency = data.reference_frequency;
   return stretch;
 }
 
@@ -127,8 +125,8 @@ Layer::Layer(const config::PMLData &data, const std::vector<int> &pml_attributes
   std::ranges::sort(attributes);
   attributes.erase(std::ranges::unique(attributes).begin(), attributes.end());
   MFEM_VERIFY(!attributes.empty(), "\"PML.Attributes\" must not be empty!");
-  MFEM_VERIFY(data.frequency_dependent || data.reference_frequency > 0.0,
-              "Static PML requires a positive reference frequency!");
+  MFEM_VERIFY(data.reference_frequency > 0.0,
+              "PML requires a positive reference frequency!");
   auto IsPMLAttribute = [this](int attr)
   { return std::ranges::binary_search(attributes, attr); };
   const std::string block = fmt::format("PML block with attributes {}", attributes);
@@ -346,30 +344,23 @@ double TheoreticalReflection(const Stretch &stretch, int f)
 namespace
 {
 
-// Pack the frequency of the stretch into the header of a QFunction context, and the
-// stretch after the header.
-void PackStretch(const Stretch &stretch, std::complex<double> omega, CeedIntScalar *ctx)
+// Pack the stretch after the header of a QFunction context.
+void PackStretch(const Stretch &stretch, CeedIntScalar *ctx)
 {
-  if (!stretch.frequency_dependent)
-  {
-    omega = stretch.reference_frequency;
-  }
-  ctx[6].second = omega.real();
-  ctx[7].second = omega.imag();
   CeedIntScalar *p = ctx + PALACE_PML_HEADER_SIZE;
   p[0].first = stretch.order;
+  p[22].second = stretch.reference_frequency;
   if (stretch.extruded)
   {
-    p[25].first = 1;
+    p[23].first = 1;
     for (int c = 0; c < 3; c++)
     {
-      p[26 + c].second = stretch.center[0][c];
-      p[29 + c].second = stretch.center[1][c];
+      p[24 + c].second = stretch.center[0][c];
+      p[27 + c].second = stretch.center[1][c];
     }
-    p[32].second = stretch.geometry.thickness[0];
-    p[33].second = stretch.sigma_max[0];
-    p[34].second = stretch.kappa_max[0];
-    p[35].second = stretch.alpha_max[0];
+    p[30].second = stretch.geometry.thickness[0];
+    p[31].second = stretch.sigma_max[0];
+    p[32].second = stretch.kappa_max[0];
     return;
   }
   for (int f = 0; f < 6; f++)
@@ -381,18 +372,16 @@ void PackStretch(const Stretch &stretch, std::complex<double> omega, CeedIntScal
   for (int a = 0; a < 3; a++)
   {
     p[19 + a].second = stretch.kappa_max[a];
-    p[22 + a].second = stretch.alpha_max[a];
   }
 }
 
 }  // namespace
 
 std::array<std::complex<double>, 3> EvaluateStretch(const Stretch &stretch,
-                                                    const std::array<double, 3> &x,
-                                                    std::complex<double> omega)
+                                                    const std::array<double, 3> &x)
 {
   std::array<CeedIntScalar, PALACE_PML_HEADER_SIZE + PALACE_PML_STRETCH_SIZE> ctx{};
-  PackStretch(stretch, omega, ctx.data());
+  PackStretch(stretch, ctx.data());
   CeedScalar s_re[3], s_im[3];
   PMLStretch(ctx.data(), x.data(), s_re, s_im);
   return {{{s_re[0], s_im[0]}, {s_re[1], s_im[1]}, {s_re[2], s_im[2]}}};
@@ -400,12 +389,11 @@ std::array<std::complex<double>, 3> EvaluateStretch(const Stretch &stretch,
 
 std::array<std::complex<double>, 9>
 EvaluateJacobian(const Stretch &stretch, const std::array<double, 3> &x, double xi,
-                 const std::array<double, 3> &grad_xi, std::complex<double> omega,
-                 bool magnitude)
+                 const std::array<double, 3> &grad_xi, bool magnitude)
 {
   MFEM_VERIFY(stretch.extruded, "The Jacobian is only evaluated for an extruded stretch!");
   std::array<CeedIntScalar, PALACE_PML_HEADER_SIZE + PALACE_PML_STRETCH_SIZE> ctx{};
-  PackStretch(stretch, omega, ctx.data());
+  PackStretch(stretch, ctx.data());
   CeedScalar J_re[9], J_im[9];
   PMLExtrudedJacobian(ctx.data(), x.data(), xi, grad_xi.data(), magnitude, J_re, J_im);
   std::array<std::complex<double>, 9> J;
@@ -433,31 +421,12 @@ void CheckStretchContinuity(const std::vector<Layer> &layers, const Mesh &mesh)
     return (it == attr_layer.end()) ? -1 : it->second;
   };
 
-  // The stretch factors κ + σ / (α + iω) of two sides agree as functions of the frequency
-  // if they agree at three frequencies (their difference is a ratio of polynomials of
-  // degree at most two in ω). A static stretch is constant. The test frequencies are on
-  // the scale of the conductivities, where both terms contribute.
-  double scale = 0.0;
-  for (const auto &layer : layers)
-  {
-    for (auto sigma_max : layer.GetStretch().sigma_max)
-    {
-      scale = std::max(scale, sigma_max);
-    }
-  }
-  scale = (scale > 0.0) ? scale : 1.0;
-  const std::array<double, 3> omega_test = {0.5 * scale, scale, 2.0 * scale};
+  // The stretch factors of the two sides, one in the physical region.
   constexpr double tol = 1.0e-6;
   auto Stretches = [&](int k, const std::array<double, 3> &x)
   {
-    std::array<std::complex<double>, 9> s;
-    for (int i = 0; i < 3; i++)
-    {
-      const auto s_i = (k < 0) ? std::array<std::complex<double>, 3>{{1.0, 1.0, 1.0}}
-                               : EvaluateStretch(layers[k].GetStretch(), x, omega_test[i]);
-      std::copy(s_i.begin(), s_i.end(), s.begin() + 3 * i);
-    }
-    return s;
+    return (k < 0) ? std::array<std::complex<double>, 3>{{1.0, 1.0, 1.0}}
+                   : EvaluateStretch(layers[k].GetStretch(), x);
   };
 
   // Loop over the local interior and shared faces with different blocks (or a block and
@@ -507,7 +476,7 @@ void CheckStretchContinuity(const std::vector<Layer> &layers, const Mesh &mesh)
           (i < n_vertices) ? vertices.IntPoint(i) : interior.IntPoint(i - n_vertices), x);
       const std::array<double, 3> xv = {x(0), x(1), x(2)};
       const auto s1 = Stretches(k1, xv), s2 = Stretches(k2, xv);
-      for (int j = 0; j < 9; j++)
+      for (int j = 0; j < 3; j++)
       {
         if (std::abs(s1[j] - s2[j]) >
             tol * std::max({1.0, std::abs(s1[j]), std::abs(s2[j])}))
@@ -555,7 +524,7 @@ void CheckStretchContinuity(const std::vector<Layer> &layers, const Mesh &mesh)
                << Region(bad_attr[0]) << " and " << Region(bad_attr[1])
                << ": the PML blocks must have the same stretch on their interfaces (the "
                   "same \"Direction\", \"Thickness\", \"Order\", absorption, and "
-                  "frequency dependence)!");
+                  "reference frequency)!");
   }
 }
 
@@ -579,9 +548,9 @@ std::vector<CeedIntScalar> PackContext(const ContextHeader &header, const Stretc
   ctx[5].second = header.c_eps.imag();
   for (int i = 0; i < 9; i++)
   {
-    ctx[8 + i].second = header.wave_vector_cross[i];
+    ctx[6 + i].second = header.wave_vector_cross[i];
   }
-  PackStretch(stretch, header.omega, ctx.data());
+  PackStretch(stretch, ctx.data());
   CeedIntScalar *attr_map = ctx.data() + PALACE_PML_HEADER_SIZE + PALACE_PML_STRETCH_SIZE;
   for (int i = 0; i < num_attr; i++)
   {

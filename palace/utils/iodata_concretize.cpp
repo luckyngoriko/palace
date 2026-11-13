@@ -254,9 +254,7 @@ void ConcretizePML(const config::PMLData &pml, json &j_pml)
                          {"SigmaMax", !computed_sigma_max ? json(pml.sigma_max[0])
                                       : pml.sigma_auto    ? json("Auto")
                                                           : json(nullptr)},
-                         {"KappaMax", pml.kappa_max[0]},
-                         {"AlphaMax", pml.alpha_max[0]},
-                         {"FrequencyDependent", pml.frequency_dependent}});
+                         {"KappaMax", pml.kappa_max[0]}});
     // The core in the form it was given (a point or a segment), or the default.
     const auto &center = pml.extrusion.center;
     if (pml.extrusion.has_center)
@@ -271,18 +269,13 @@ void ConcretizePML(const config::PMLData &pml, json &j_pml)
                                       : pml.sigma_auto    ? json("Auto")
                                                           : json(nullptr)},
                          {"KappaMax", pml.kappa_max},
-                         {"AlphaMax", pml.alpha_max},
-                         {"FrequencyDependent", pml.frequency_dependent},
                          {"AllowRefinement", pml.allow_refinement}});
   }
   if (!pml.sigma_auto)
   {
     Concretize(j_pml, "ReflectionTarget", pml.reflection_target);
   }
-  if (!pml.frequency_dependent)
-  {
-    Concretize(j_pml, "ReferenceFrequency", pml.reference_frequency);
-  }
+  Concretize(j_pml, "ReferenceFrequency", pml.reference_frequency);
 }
 
 void ConcretizeDomains(const config::DomainData &domains, json &j_domains)

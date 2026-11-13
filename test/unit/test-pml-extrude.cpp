@@ -474,33 +474,27 @@ namespace
 
 // Extruded stretch around a point core at the origin, with the profile of a layer of
 // thickness 0.5.
-pml::Stretch MakeExtrudedStretch(bool frequency_dependent)
+pml::Stretch MakeExtrudedStretch()
 {
   pml::Stretch p;
   p.extruded = true;
   p.geometry.thickness[0] = 0.5;
   p.sigma_max[0] = 3.0;
   p.kappa_max = {2.0, 2.0, 2.0};
-  p.alpha_max.fill(frequency_dependent ? 0.4 : 0.0);
   p.order = 3;
-  p.frequency_dependent = frequency_dependent;
-  p.reference_frequency = frequency_dependent ? 0.0 : 1.5;
+  p.reference_frequency = 1.5;
   return p;
 }
 
 // Independent evaluation of the stretch s(ξ) and of ξ̃(ξ) = ∫₀^ξ s (by Simpson's rule).
 std::pair<std::complex<double>, std::complex<double>>
-ReferenceProfile(const pml::Stretch &p, double xi, std::complex<double> omega)
+ReferenceProfile(const pml::Stretch &p, double xi)
 {
-  if (!p.frequency_dependent)
-  {
-    omega = p.reference_frequency;
-  }
   auto s = [&](double x)
   {
     const double shape = std::pow(x / p.geometry.thickness[0], p.order);
     return 1.0 + (p.kappa_max[0] - 1.0) * shape +
-           p.sigma_max[0] * shape / (p.alpha_max[0] * shape + 1i * omega);
+           p.sigma_max[0] * shape / (1i * p.reference_frequency);
   };
   constexpr int n = 2000;
   std::complex<double> integral = 0.0;
@@ -515,15 +509,13 @@ ReferenceProfile(const pml::Stretch &p, double xi, std::complex<double> omega)
 // Requested part of c μ̃⁻¹ or c ε̃ from the device helpers, for an isotropic or anisotropic
 // background.
 std::array<double, 9> EvalCoeffAt(const pml::Stretch &p, const pml::Background &b,
-                                  pml::TensorPart part, std::complex<double> c,
-                                  std::complex<double> omega, bool muinv,
+                                  pml::TensorPart part, std::complex<double> c, bool muinv,
                                   const std::array<double, 3> &x, double xi,
                                   const std::array<double, 3> &grad_xi)
 {
   pml::ContextHeader header;
   header.part = part;
   (muinv ? header.c_muinv : header.c_eps) = c;
-  header.omega = omega;
   const auto ctx = pml::PackContext(header, p, {0}, {b});
   std::array<double, 9> coeff;
   REQUIRE(PMLCoeffAt(ctx.data(), 1, x.data(), xi, grad_xi.data(),
@@ -556,16 +548,15 @@ constexpr std::array<pml::TensorPart, 4> all_parts = {
 
 TEST_CASE("Extruded PML stretch", "[pml][Serial]")
 {
-  const bool frequency_dependent = GENERATE(false, true);
-  const auto p = MakeExtrudedStretch(frequency_dependent);
-  const std::complex<double> omega = 1.3 + 0.05i, c = 0.7 - 0.2i;
+  const auto p = MakeExtrudedStretch();
+  const std::complex<double> c = 0.7 - 0.2i;
 
   SECTION("Identity at the interface")
   {
     const std::array<double, 3> x = {0.3, -0.5, 1.1}, grad_xi = {0.2, 0.7, -0.1};
     for (bool magnitude : {false, true})
     {
-      const auto J = pml::EvaluateJacobian(p, x, 0.0, grad_xi, omega, magnitude);
+      const auto J = pml::EvaluateJacobian(p, x, 0.0, grad_xi, magnitude);
       for (int k = 0; k < 9; k++)
       {
         CHECK(J[k] == std::complex<double>((k % 4 == 0) ? 1.0 : 0.0, 0.0));
@@ -593,14 +584,14 @@ TEST_CASE("Extruded PML stretch", "[pml][Serial]")
     {
       const double r = 1.0 + xi;
       const std::array<double, 3> x = {r * dir[0], r * dir[1], r * dir[2]};
-      const auto [s, xi_t] = ReferenceProfile(p, xi, omega);
+      const auto [s, xi_t] = ReferenceProfile(p, xi);
       const auto q = (1.0 + xi_t) / r;
       const double s_mag = std::abs(s), q_mag = std::abs(q);
       for (bool muinv : {true, false})
       {
         for (auto part : all_parts)
         {
-          const auto coeff = EvalCoeffAt(p, b, part, c, omega, muinv, x, xi, dir);
+          const auto coeff = EvalCoeffAt(p, b, part, c, muinv, x, xi, dir);
           for (int j = 0; j < 3; j++)
           {
             for (int i = 0; i < 3; i++)
@@ -632,9 +623,7 @@ TEST_CASE("Extruded PML stretch", "[pml][Serial]")
     cartesian.geometry.thickness = {0.0, 0.0, 0.0, 0.0, 0.0, p.geometry.thickness[0]};
     cartesian.sigma_max[5] = p.sigma_max[0];
     cartesian.kappa_max = p.kappa_max;
-    cartesian.alpha_max = p.alpha_max;
     cartesian.order = p.order;
-    cartesian.frequency_dependent = p.frequency_dependent;
     cartesian.reference_frequency = p.reference_frequency;
     pml::Background b;
     b.mu_inv = {0.8, 0.1, 0.0, 0.1, 0.9, 0.05, 0.0, 0.05, 1.1};
@@ -643,7 +632,7 @@ TEST_CASE("Extruded PML stretch", "[pml][Serial]")
     for (double xi : {0.1, 0.3, 0.5})
     {
       const std::array<double, 3> x = {0.2, -0.4, 1.0 + xi};
-      const auto s = pml::EvaluateStretch(cartesian, x, omega)[2];
+      const auto s = pml::EvaluateStretch(cartesian, x)[2];
       for (bool muinv : {true, false})
       {
         for (auto part : all_parts)
@@ -651,7 +640,6 @@ TEST_CASE("Extruded PML stretch", "[pml][Serial]")
           pml::ContextHeader header;
           header.part = part;
           (muinv ? header.c_muinv : header.c_eps) = c;
-          header.omega = omega;
           const auto ctx_s = pml::PackContext(header, cartesian, {0}, {b});
           const auto ctx_j = pml::PackContext(header, p, {0}, {b});
           std::array<double, 9> coeff_s, coeff_j;
@@ -707,7 +695,7 @@ public:
     T.Transform(ip, x);
     const double xi = depth.GetValue(T, ip);
     depth.GetGradient(T, grad_xi);
-    const auto [s, xi_t] = ReferenceProfile(p, xi, 0.0);
+    const auto [s, xi_t] = ReferenceProfile(p, xi);
     const double r = x.Norml2();
     std::array<std::complex<double>, 9> J, adj;
     for (int j = 0; j < 3; j++)

@@ -46,7 +46,6 @@ pml::Stretch MakeBoxStretch()
   p.geometry.thickness = {0.2, 0.3, 0.25, 0.2, 0.4, 0.1};
   p.sigma_max = {3.0, 2.0, 4.0, 1.0, 2.5, 5.0};
   p.kappa_max = {2.0, 1.5, 3.0};
-  p.alpha_max = {0.1, 0.2, 0.05};
   p.order = 2;
   p.reference_frequency = 2.0;
   return p;
@@ -65,13 +64,8 @@ pml::Background MakeAnisotropicBackground()
 
 // Independent reference evaluation of the stretch factors with std::complex arithmetic.
 std::array<std::complex<double>, 3> ReferenceStretch(const pml::Stretch &p,
-                                                     const std::array<double, 3> &x,
-                                                     std::complex<double> omega)
+                                                     const std::array<double, 3> &x)
 {
-  if (!p.frequency_dependent)
-  {
-    omega = p.reference_frequency;
-  }
   std::array<std::complex<double>, 3> s;
   for (int a = 0; a < 3; a++)
   {
@@ -94,7 +88,7 @@ std::array<std::complex<double>, 3> ReferenceStretch(const pml::Stretch &p,
     }
     const double shape = std::pow(std::min(r, 1.0), p.order);
     s[a] = 1.0 + (p.kappa_max[a] - 1.0) * shape +
-           sigma_max * shape / (p.alpha_max[a] * shape + 1i * omega);
+           sigma_max * shape / (1i * p.reference_frequency);
   }
   return s;
 }
@@ -104,10 +98,9 @@ std::array<std::complex<double>, 3> ReferenceStretch(const pml::Stretch &p,
 std::array<std::complex<double>, 9> ReferenceMuInv(const pml::Stretch &p,
                                                    const pml::Background &b,
                                                    const std::array<double, 3> &x,
-                                                   std::complex<double> omega,
                                                    bool magnitude = false)
 {
-  const auto s = ReferenceStretch(p, x, omega);
+  const auto s = ReferenceStretch(p, x);
   const auto det = s[0] * s[1] * s[2];
   std::array<std::complex<double>, 9> T;
   for (int j = 0; j < 3; j++)
@@ -124,10 +117,9 @@ std::array<std::complex<double>, 9> ReferenceMuInv(const pml::Stretch &p,
 std::array<std::complex<double>, 9> ReferenceEps(const pml::Stretch &p,
                                                  const pml::Background &b,
                                                  const std::array<double, 3> &x,
-                                                 std::complex<double> omega,
                                                  bool magnitude = false)
 {
-  const auto s = ReferenceStretch(p, x, omega);
+  const auto s = ReferenceStretch(p, x);
   const auto det = s[0] * s[1] * s[2];
   std::array<std::complex<double>, 9> T;
   for (int j = 0; j < 3; j++)
@@ -157,13 +149,12 @@ bool EvalCoeff(const pml::Stretch &p, const pml::Background &b,
 }
 
 void CheckCoeff(const pml::Stretch &p, const pml::Background &b, std::complex<double> c,
-                std::complex<double> omega, const std::array<double, 3> &x)
+                const std::array<double, 3> &x)
 {
   for (bool muinv : {true, false})
   {
-    const auto T = muinv ? ReferenceMuInv(p, b, x, omega) : ReferenceEps(p, b, x, omega);
-    const auto T_mag =
-        muinv ? ReferenceMuInv(p, b, x, omega, true) : ReferenceEps(p, b, x, omega, true);
+    const auto T = muinv ? ReferenceMuInv(p, b, x) : ReferenceEps(p, b, x);
+    const auto T_mag = muinv ? ReferenceMuInv(p, b, x, true) : ReferenceEps(p, b, x, true);
     for (auto part :
          {pml::TensorPart::REAL, pml::TensorPart::IMAG,
           pml::TensorPart::STRETCH_MAGNITUDE_REAL, pml::TensorPart::STRETCH_MAGNITUDE_IMAG})
@@ -171,7 +162,6 @@ void CheckCoeff(const pml::Stretch &p, const pml::Background &b, std::complex<do
       pml::ContextHeader header;
       header.part = part;
       (muinv ? header.c_muinv : header.c_eps) = c;
-      header.omega = omega;
       std::array<double, 9> coeff;
       REQUIRE(EvalCoeff(p, b, header, muinv, x, coeff));
       for (int k = 0; k < 9; k++)
@@ -297,7 +287,7 @@ TEST_CASE("PML::BuildStretch", "[pml][Serial]")
     }
   }
 
-  SECTION("Static and frequency-dependent stretch")
+  SECTION("Grading, real stretch, and reference frequency")
   {
     data.order = 2;
     data.kappa_max = {1.0, 2.0, 3.0};
@@ -305,15 +295,7 @@ TEST_CASE("PML::BuildStretch", "[pml][Serial]")
     auto p = pml::BuildStretch(data, g, 4.0);
     CHECK(p.order == 2);
     CHECK(p.kappa_max == data.kappa_max);
-    CHECK(!p.frequency_dependent);
     CHECK(p.reference_frequency == Approx(5.0));
-
-    data.frequency_dependent = true;
-    data.alpha_max = {0.0, 0.1, 0.2};
-    p = pml::BuildStretch(data, g, 4.0);
-    CHECK(p.frequency_dependent);
-    CHECK(p.alpha_max == data.alpha_max);
-    CHECK(p.reference_frequency == 0.0);
   }
 }
 
@@ -342,22 +324,17 @@ TEST_CASE("PML::RefractiveIndex", "[pml][Serial]")
 
 TEST_CASE("PML::EvaluateStretch", "[pml][Serial]")
 {
-  auto p = MakeBoxStretch();
-  const std::complex<double> omega = 1.3 - 0.2i;
-  for (bool frequency_dependent : {false, true})
+  const auto p = MakeBoxStretch();
+  for (const std::array<double, 3> &x :
+       {std::array<double, 3>{0.0, 0.0, 0.0}, std::array<double, 3>{-1.1, 0.5, 1.05},
+        std::array<double, 3>{1.2, -1.2, -1.3}, std::array<double, 3>{1.4, 1.3, -1.5}})
   {
-    p.frequency_dependent = frequency_dependent;
-    for (const std::array<double, 3> &x :
-         {std::array<double, 3>{0.0, 0.0, 0.0}, std::array<double, 3>{-1.1, 0.5, 1.05},
-          std::array<double, 3>{1.2, -1.2, -1.3}, std::array<double, 3>{1.4, 1.3, -1.5}})
+    const auto s = pml::EvaluateStretch(p, x);
+    const auto s_ref = ReferenceStretch(p, x);
+    for (int a = 0; a < 3; a++)
     {
-      const auto s = pml::EvaluateStretch(p, x, omega);
-      const auto s_ref = ReferenceStretch(p, x, omega);
-      for (int a = 0; a < 3; a++)
-      {
-        CHECK(s[a].real() == Approx(s_ref[a].real()).margin(1.0e-14));
-        CHECK(s[a].imag() == Approx(s_ref[a].imag()).margin(1.0e-14));
-      }
+      CHECK(s[a].real() == Approx(s_ref[a].real()).margin(1.0e-14));
+      CHECK(s[a].imag() == Approx(s_ref[a].imag()).margin(1.0e-14));
     }
   }
 }
@@ -408,7 +385,7 @@ TEST_CASE("PML tensors for a single-axis layer", "[pml][Serial]")
 
 TEST_CASE("PML tensors match the reference evaluation", "[pml][Serial]")
 {
-  auto p = MakeBoxStretch();
+  const auto p = MakeBoxStretch();
   const auto b = MakeAnisotropicBackground();
   // Points in the physical region, face, edge, and corner regions of the layer.
   const std::array<std::array<double, 3>, 5> points = {{{0.2, -0.3, 0.4},
@@ -416,53 +393,10 @@ TEST_CASE("PML tensors match the reference evaluation", "[pml][Serial]")
                                                         {-1.15, 1.1, 0.5},
                                                         {1.25, -1.2, -1.35},
                                                         {-1.3, 1.3, 1.2}}};
-  SECTION("Static stretch")
+  for (const auto &x : points)
   {
-    for (const auto &x : points)
-    {
-      CheckCoeff(p, b, 1.0, 0.0, x);
-      CheckCoeff(p, b, {-2.5, 0.7}, 0.0, x);
-    }
-  }
-
-  SECTION("Frequency-dependent stretch at real and complex frequencies")
-  {
-    p.frequency_dependent = true;
-    p.reference_frequency = 0.0;
-    for (const auto &x : points)
-    {
-      for (std::complex<double> omega :
-           {std::complex<double>{1.7, 0.0}, {1.7, 0.3}, {0.9, -0.2}})
-      {
-        CheckCoeff(p, b, 1.0, omega, x);
-        CheckCoeff(p, b, -omega * omega, omega, x);
-      }
-    }
-  }
-
-  SECTION("Frequency-dependent stretch is the analytic continuation in ω")
-  {
-    // The tensors are holomorphic in ω: check the Cauchy-Riemann equations with central
-    // differences for one entry.
-    p.frequency_dependent = true;
-    const std::array<double, 3> x = {1.25, -1.2, -1.35};
-    const std::complex<double> omega = {1.3, 0.2};
-    const double h = 1.0e-6;
-    auto F = [&](std::complex<double> w)
-    {
-      pml::ContextHeader header;
-      header.c_eps = 1.0;
-      header.omega = w;
-      std::array<double, 9> re, im;
-      header.part = pml::TensorPart::REAL;
-      EvalCoeff(p, b, header, false, x, re);
-      header.part = pml::TensorPart::IMAG;
-      EvalCoeff(p, b, header, false, x, im);
-      return std::complex<double>(re[4], im[4]);
-    };
-    const auto dFdr = (F(omega + h) - F(omega - h)) / (2.0 * h);
-    const auto dFdi = (F(omega + 1i * h) - F(omega - 1i * h)) / (2.0 * h);
-    CHECK(std::abs(dFdi - 1i * dFdr) < 1.0e-6 * std::abs(dFdr));
+    CheckCoeff(p, b, 1.0, x);
+    CheckCoeff(p, b, {-2.5, 0.7}, x);
   }
 }
 
@@ -476,10 +410,9 @@ TEST_CASE("PML::PackContext", "[pml][Serial]")
   header.part = pml::TensorPart::IMAG;
   header.c_muinv = {1.0, 2.0};
   header.c_eps = {3.0, 4.0};
-  header.omega = {5.0, 6.0};
   header.wave_vector_cross = {0.0, 1.0, -2.0, -1.0, 0.0, 3.0, 2.0, -3.0, 0.0};
 
-  SECTION("Static stretch")
+  SECTION("Context layout")
   {
     const auto ctx = pml::PackContext(header, p, attr_background, {b0, b1});
     CHECK(ctx.size() == PALACE_PML_HEADER_SIZE + PALACE_PML_STRETCH_SIZE +
@@ -488,10 +421,9 @@ TEST_CASE("PML::PackContext", "[pml][Serial]")
     CHECK(PMLPart(ctx.data()) == PALACE_PML_PART_IM);
     CHECK(ctx[2].second == 1.0);
     CHECK(ctx[5].second == 4.0);
-    CHECK(ctx[6].second == p.reference_frequency);  // Stretch at ω₀
-    CHECK(ctx[7].second == 0.0);
     CHECK(PMLWaveVectorCross(ctx.data())[5].second == 3.0);
     CHECK(ctx[PALACE_PML_HEADER_SIZE].first == p.order);
+    CHECK(ctx[PALACE_PML_HEADER_SIZE + 22].second == p.reference_frequency);
     CHECK(ctx[PALACE_PML_HEADER_SIZE + 13 + 5].second == p.sigma_max[5]);
     CHECK(PMLBackgroundData(ctx.data(), 2) == nullptr);
     CHECK(PMLBackgroundData(ctx.data(), 5) == nullptr);  // Out of range
@@ -499,15 +431,6 @@ TEST_CASE("PML::PackContext", "[pml][Serial]")
     CHECK(PMLBackgroundData(ctx.data(), 1)[9 + 4].second == b1.epsilon_real[4]);
     CHECK(PMLBackgroundData(ctx.data(), 4)[18].second == b1.epsilon_imag[0]);
     CHECK(PMLBackgroundData(ctx.data(), 3)[9].second == 1.0);
-  }
-
-  SECTION("Frequency-dependent stretch")
-  {
-    auto q = p;
-    q.frequency_dependent = true;
-    const auto ctx = pml::PackContext(header, q, attr_background, {b0, b1});
-    CHECK(ctx[6].second == 5.0);  // Stretch at the solve frequency
-    CHECK(ctx[7].second == 6.0);
   }
 
   SECTION("No attribute in a PML region")
@@ -563,7 +486,6 @@ TEST_CASE("MaterialOperator PML regions", "[pml][materialoperator][Serial]")
     MaterialOperator mat_op(MakeMaterials(false), periodic, ProblemType::DRIVEN, *mesh,
                             {pml});
     REQUIRE(mat_op.HasPML());
-    CHECK(!mat_op.HasFrequencyDependentPML());
     const auto &stretch = mat_op.GetPMLLayers().at(0).GetStretch();
     CHECK(stretch.geometry.thickness[5] == Approx(0.25));
     CHECK(stretch.element_size[5] == Approx(0.25));
@@ -753,7 +675,7 @@ TEST_CASE("MaterialOperator PML blocks", "[pml][materialoperator][Serial][Parall
       CHECK(mat_op.GetPMLLayers()[1].IsPMLCeedAttribute(ceed_attr) == (attr >= 5));
     }
 
-    // A different grading, absorption, or frequency dependence of the +x face of the second
+    // A different grading, absorption, or reference frequency of the +x face of the second
     // block makes the stretch discontinuous across the interface z = 0.75.
     auto bad = pml;
     bad[1].order = 2;
@@ -768,25 +690,11 @@ TEST_CASE("MaterialOperator PML blocks", "[pml][materialoperator][Serial][Parall
     bad = pml;
     bad[1].reference_frequency = 3.0;
     CHECK_THROWS(MaterialOperator(materials, periodic, ProblemType::DRIVEN, mesh, bad));
-    bad = pml;
-    bad[1].frequency_dependent = true;
-    CHECK_THROWS(MaterialOperator(materials, periodic, ProblemType::DRIVEN, mesh, bad));
 
     // The edge regions of the first block must also be stretched along x.
     bad = pml;
     Configure(bad[0], 5, 0.25);
     CHECK_THROWS(MaterialOperator(materials, periodic, ProblemType::DRIVEN, mesh, bad));
-
-    // The same holds for frequency-dependent stretches.
-    auto fd = pml;
-    for (auto &data : fd)
-    {
-      data.frequency_dependent = true;
-      data.alpha_max = {0.1, 0.1, 0.1};
-    }
-    CHECK_NOTHROW(MaterialOperator(materials, periodic, ProblemType::DRIVEN, mesh, fd));
-    fd[1].alpha_max = {0.2, 0.1, 0.1};
-    CHECK_THROWS(MaterialOperator(materials, periodic, ProblemType::DRIVEN, mesh, fd));
 
     // The PML attributes of the blocks are disjoint.
     bad = pml;
@@ -813,15 +721,13 @@ TEST_CASE("MaterialOperator PML blocks", "[pml][materialoperator][Serial][Parall
     pml[0].order = 2;
     pml[0].sigma_auto = false;
     pml[0].reflection_target = 1.0e-4;
-    pml[1].frequency_dependent = true;
     pml[1].kappa_max = {1.0, 1.0, 2.0};
     MaterialOperator mat_op(materials, periodic, ProblemType::DRIVEN, mesh, pml);
     REQUIRE(mat_op.GetPMLLayers().size() == 2);
-    CHECK(mat_op.HasFrequencyDependentPML());
     const auto &p0 = mat_op.GetPMLLayers()[0].GetStretch();
     const auto &p1 = mat_op.GetPMLLayers()[1].GetStretch();
-    CHECK(!p0.frequency_dependent);
-    CHECK(p1.frequency_dependent);
+    CHECK(p0.kappa_max[2] == 1.0);
+    CHECK(p1.kappa_max[2] == 2.0);
     CHECK(p0.geometry.thickness == std::array<double, 6>{0.0, 0.0, 0.0, 0.0, 0.25, 0.0});
     CHECK(p1.geometry.thickness == std::array<double, 6>{0.0, 0.0, 0.0, 0.0, 0.0, 0.25});
     CHECK(p0.sigma_max[4] == Approx(-3.0 * std::log(1.0e-4) / (2.0 * 0.25)));

@@ -411,14 +411,6 @@ void IoData::CheckConfiguration()
                     !boundaries.lumpedport.empty() || !boundaries.waveport.empty(),
                 "Driven system with circuit synthesis (AdaptiveCircuitSynthesis) requires "
                 "at least one port (LumpedPort or WavePort) boundary condition!\n");
-    const bool floquet_fd_pml = std::ranges::any_of(boundaries.periodic.wave_vector,
-                                                    [](double k) { return k != 0.0; }) &&
-                                std::ranges::any_of(domains.pml, [](const auto &data)
-                                                    { return data.frequency_dependent; });
-    MFEM_VERIFY(!solver.driven.adaptive_circuit_synthesis || !floquet_fd_pml,
-                "Driven system with circuit synthesis (AdaptiveCircuitSynthesis) does not "
-                "support frequency-dependent PML regions with a Floquet wave vector: the "
-                "synthesized PML terms must be reciprocal!\n");
     MFEM_VERIFY(!solver.driven.adaptive_circuit_synthesis || boundaries.floquetport.empty(),
                 "Driven system with circuit synthesis (AdaptiveCircuitSynthesis) does not "
                 "yet support Floquet port boundaries. The Floquet Robin dispersion is "
@@ -611,7 +603,7 @@ void IoData::CheckConfiguration()
 
   for (auto &pml : domains.pml)
   {
-    if (pml.frequency_dependent || pml.reference_frequency > 0.0)
+    if (pml.reference_frequency > 0.0)
     {
       continue;
     }
@@ -623,8 +615,8 @@ void IoData::CheckConfiguration()
     if (problem.type == ProblemType::DRIVEN)
     {
       MFEM_VERIFY(!solver.driven.sample_f.empty(),
-                  "Static PML default ReferenceFrequency requires at least one driven "
-                  "sample frequency!");
+                  "The default PML ReferenceFrequency requires at least one driven sample "
+                  "frequency!");
       // The absorption of a static PML grows with frequency: use the lowest frequency so
       // that the reflection target is met at all frequencies.
       reference_frequency = *std::ranges::min_element(solver.driven.sample_f);
@@ -638,7 +630,7 @@ void IoData::CheckConfiguration()
       // PML regions are only supported for driven and eigenmode simulations, and treated
       // as regular materials otherwise (see MaterialOperator).
       MFEM_VERIFY(reference_frequency > 0.0,
-                  "Static PML requires a positive reference frequency. Set "
+                  "PML requires a positive reference frequency. Set "
                   "\"PML.ReferenceFrequency\", use positive driven sample frequencies, "
                   "or set a positive Eigenmode target.");
       pml.reference_frequency = reference_frequency;

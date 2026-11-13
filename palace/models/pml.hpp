@@ -26,14 +26,13 @@ namespace pml
 // Cartesian perfectly matched layer (PML) model. Within the layer, the coordinates normal
 // to each active face of the PML box are stretched by the complex factor (Palace's e^{+iωt}
 // time convention)
-//                       s(x, ω) = κ(x) + σ(x) / (α(x) + iω) ,
-// with σ, κ - 1, α graded polynomially from zero at the inner interface to their maximum
-// values at the outer boundary. The stretch is applied through the equivalent anisotropic
-// material tensors μ̃⁻¹ = S μ⁻¹ S / det(S) and ε̃ = det(S) S⁻¹ ε S⁻¹, S = diag(s_x, s_y,
-// s_z), of the background material properties μ⁻¹ and ε of each PML region, evaluated at
-// each quadrature point (see fem/qfunctions/coeff/pml_qf.h). A static stretch uses a fixed
-// real reference frequency ω₀, while a frequency-dependent stretch uses the (possibly
-// complex) solve frequency.
+//                       s(x) = κ(x) + σ(x) / (iω₀) ,
+// with σ and κ - 1 graded polynomially from zero at the inner interface to their maximum
+// values at the outer boundary, for a fixed real reference frequency ω₀ (a static
+// stretch). The stretch is applied through the equivalent anisotropic material tensors μ̃⁻¹
+// = S μ⁻¹ S / det(S) and ε̃ = det(S) S⁻¹ ε S⁻¹, S = diag(s_x, s_y, s_z), of the background
+// material properties μ⁻¹ and ε of each PML region, evaluated at each quadrature point (see
+// fem/qfunctions/coeff/pml_qf.h).
 //
 // The PML regions are configured in blocks, each with its own stretch: the stretch of a
 // block is the same function of position in all of its PML regions, so that the PML is a
@@ -71,9 +70,7 @@ struct Stretch
   std::array<std::array<double, 3>, 2> center{};
   std::array<double, 6> sigma_max{};
   std::array<double, 3> kappa_max{{1.0, 1.0, 1.0}};
-  std::array<double, 3> alpha_max{};
   int order = 3;
-  bool frequency_dependent = false;
   double reference_frequency = 0.0;
   bool sigma_auto = false;
   double refractive_index = 1.0;
@@ -141,27 +138,23 @@ enum class TensorPart : int
 };
 
 // Per-integrator data of the PML QFunction context: the integrator assembles
-// part(c_muinv μ̃⁻¹) and/or part(c_eps ε̃) terms, with the frequency-dependent stretch
-// evaluated at omega (ignored for a static stretch).
+// part(c_muinv μ̃⁻¹) and/or part(c_eps ε̃) terms.
 struct ContextHeader
 {
   TensorPart part = TensorPart::REAL;
-  std::complex<double> c_muinv = 0.0, c_eps = 0.0, omega = 0.0;
+  std::complex<double> c_muinv = 0.0, c_eps = 0.0;
   std::array<double, 9> wave_vector_cross{};  // [k ×], column-major
 };
 
-// Stretch factors s_a(x, ω) at the point x, with the frequency-dependent stretch evaluated
-// at omega (ignored for a static stretch).
+// Stretch factors s_a(x) at the point x.
 std::array<std::complex<double>, 3> EvaluateStretch(const Stretch &stretch,
-                                                    const std::array<double, 3> &x,
-                                                    std::complex<double> omega);
+                                                    const std::array<double, 3> &x);
 
 // Jacobian J̃ of an extruded stretch (3 x 3, column-major) at the point x with the depth xi
 // into the layer and its gradient grad_xi, or with the magnitudes of the stretch factors.
 std::array<std::complex<double>, 9>
 EvaluateJacobian(const Stretch &stretch, const std::array<double, 3> &x, double xi,
-                 const std::array<double, 3> &grad_xi, std::complex<double> omega,
-                 bool magnitude = false);
+                 const std::array<double, 3> &grad_xi, bool magnitude = false);
 
 // Pack the QFunction context of a PML integrator (layout in fem/qfunctions/coeff/pml_qf.h),
 // with attr_background the background index of each (1-based) libCEED attribute (-1 for
@@ -202,7 +195,6 @@ public:
         int fe_order = 1);
 
   const Stretch &GetStretch() const { return stretch; }
-  bool IsFrequencyDependent() const { return stretch.frequency_dependent; }
   const std::vector<int> &GetAttributes() const { return attributes; }
 
   // Whether the local libCEED attribute is in a PML region of the block.
@@ -220,8 +212,8 @@ public:
 // Check that the stretch is continuous across the interfaces between the PML regions of
 // different blocks, and equal to one at the interfaces between the PML regions and the
 // physical region: at points of each mesh face on these interfaces, the stretch factors of
-// the two sides must be the same functions of the frequency. Otherwise, the
-// PML is not a coordinate transformation and the interfaces reflect.
+// the two sides must be the same. Otherwise, the PML is not a coordinate transformation and
+// the interfaces reflect.
 void CheckStretchContinuity(const std::vector<Layer> &layers, const Mesh &mesh);
 
 }  // namespace pml

@@ -306,7 +306,7 @@ public:
   bool sigma_auto = true;
 
   // Peak conductivity σ_max per axis, in S/m (nondimensionalized at load time). The stretch
-  // factor along each axis is s = κ + σ / (ε₀ (2π α + iω)). Negative entries are computed
+  // factor along each axis is s = κ + σ / (iε₀ω₀). Negative entries are computed
   // per face from the element size (sigma_auto), or from reflection_target as σ_max =
   // −(n + 1) ln(R) / (2 Z₀ n_r d), with d the face thickness and n_r the smallest
   // refractive index of the materials of the PML regions.
@@ -315,25 +315,15 @@ public:
   // Peak real coordinate scaling κ_max per axis (dimensionless, ≥ 1).
   std::array<double, 3> kappa_max{{1.0, 1.0, 1.0}};
 
-  // Peak complex frequency shift α_max per axis for CFS-PML, as a frequency in GHz
-  // (nondimensionalized to the angular frequency 2π α_max at load time). Only for a
-  // frequency-dependent stretch.
-  std::array<double, 3> alpha_max{{0.0, 0.0, 0.0}};
-
   // Target normal-incidence reflection coefficient for the computed σ_max, if specified
   // (!sigma_auto).
   double reflection_target = 1.0e-6;
 
-  // If true, the stretch factors are evaluated at the solve frequency: the real frequency
-  // of each driven solve, or the complex eigenfrequency of the eigenmode nonlinear solve
-  // (making the eigenvalue problem nonlinear). If false, they are evaluated at the
-  // reference frequency below, which keeps the system matrices frequency-independent.
-  bool frequency_dependent = false;
-
-  // Reference frequency f₀ in GHz for a static stretch (nondimensionalized to the angular
-  // frequency ω₀ = 2π f₀ at load time). Negative means use the solver default (the lowest
-  // driven frequency or the eigenmode target, so that the absorption, which grows with
-  // frequency, meets the target at all frequencies). Ignored when frequency_dependent.
+  // Reference frequency f₀ in GHz at which the stretch factors are evaluated, which keeps
+  // the system matrices frequency-independent (nondimensionalized to the angular frequency
+  // ω₀ = 2π f₀ at load time). Negative means use the solver default (the lowest driven
+  // frequency or the eigenmode target, so that the absorption, which grows with frequency,
+  // meets the target at all frequencies).
   double reference_frequency = -1.0;
 
   // If false, adaptive mesh refinement is disabled inside of the PML regions (the error

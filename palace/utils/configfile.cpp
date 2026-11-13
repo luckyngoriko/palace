@@ -15,7 +15,6 @@
 #include <mfem.hpp>
 #include <nlohmann/json.hpp>
 
-#include "communication.hpp"
 #include "units.hpp"
 #include "utils/constants.hpp"
 #include "utils/enum_string.hpp"
@@ -457,40 +456,21 @@ PMLData::PMLData(const json &pml, bool extruded)
   }
   sigma_auto = !has_reflection_target;
   ParseScalarOrArray3(pml, "KappaMax", kappa_max);
-  ParseScalarOrArray3(pml, "AlphaMax", alpha_max);
   MFEM_VERIFY(std::ranges::all_of(kappa_max, [](double k) { return k >= 1.0; }),
               "\"PML.KappaMax\" entries must be ≥ 1!");
-  MFEM_VERIFY(std::ranges::all_of(alpha_max, [](double a) { return a >= 0.0; }),
-              "\"PML.AlphaMax\" entries must be nonnegative!");
   // The extruded PML stretches the single direction of the rays of the extrusion.
   auto IsScalar = [](const std::array<double, 3> &v)
   { return v[0] == v[1] && v[1] == v[2]; };
-  MFEM_VERIFY(!extruded ||
-                  (IsScalar(sigma_max) && IsScalar(kappa_max) && IsScalar(alpha_max)),
-              "\"PML.SigmaMax\", \"PML.KappaMax\", and \"PML.AlphaMax\" must be scalars "
-              "for config[\"Boundaries\"][\"PML\"]!");
+  MFEM_VERIFY(!extruded || (IsScalar(sigma_max) && IsScalar(kappa_max)),
+              "\"PML.SigmaMax\" and \"PML.KappaMax\" must be scalars for "
+              "config[\"Boundaries\"][\"PML\"]!");
 
   reflection_target = pml.value("ReflectionTarget", reflection_target);
   MFEM_VERIFY(reflection_target > 0.0 && reflection_target < 1.0,
               "\"PML.ReflectionTarget\" must be in (0, 1) (got " << reflection_target
                                                                  << ")!");
 
-  frequency_dependent = pml.value("FrequencyDependent", frequency_dependent);
   reference_frequency = pml.value("ReferenceFrequency", reference_frequency);
-
-  // For a static stretch, the complex frequency shift only changes the constant stretch
-  // factor κ + σ / (α + iω₀), which is the same as the one of different κ and σ.
-  MFEM_VERIFY(frequency_dependent ||
-                  std::ranges::all_of(alpha_max, [](double a) { return a == 0.0; }),
-              "\"PML.AlphaMax\" requires \"PML.FrequencyDependent\": for a static PML, the "
-              "complex frequency shift is equivalent to a different \"KappaMax\" and "
-              "\"SigmaMax\"!");
-
-  if (frequency_dependent && pml.find("ReferenceFrequency") != pml.end())
-  {
-    Mpi::Warning("\"PML.ReferenceFrequency\" is ignored when "
-                 "\"PML.FrequencyDependent\" is true.\n");
-  }
 
   allow_refinement = pml.value("AllowRefinement", allow_refinement);
 }
@@ -2091,10 +2071,8 @@ void Nondimensionalize(const Units &units, PMLData &data)
       c /= units.GetMeshLengthRelativeScale();
     }
   }
-  // ω₀ [Hz] → angular nondimensional frequency. Palace's solver uses ω = 2πf
-  // (angular) when passing "omega" into GetExtraSystemMatrix and the stretch
-  // formulas, so reference_frequency must match that convention — multiply by 2π
-  // in addition to the unit conversion.
+  // f₀ [GHz] → angular nondimensional frequency ω₀ = 2π f₀, the convention of the
+  // frequencies of the solvers and of the stretch formulas.
   if (data.reference_frequency > 0.0)
   {
     data.reference_frequency = 2.0 * std::numbers::pi * data.reference_frequency /
@@ -2107,15 +2085,6 @@ void Nondimensionalize(const Units &units, PMLData &data)
     if (s > 0.0)
     {
       s /= units.GetScaleFactor<Units::ValueType::CONDUCTIVITY>();
-    }
-  }
-  // α is an angular-frequency-like quantity in the CFS denominator (α + iω); apply
-  // the same 2π factor as reference_frequency so α and ω share units.
-  for (auto &a : data.alpha_max)
-  {
-    if (a > 0.0)
-    {
-      a = 2.0 * std::numbers::pi * a / units.GetScaleFactor<Units::ValueType::FREQUENCY>();
     }
   }
   // κ is dimensionless; nothing to scale.

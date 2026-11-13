@@ -1134,17 +1134,6 @@ TEST_CASE("Config preconditioner matrix symmetry", "[config][Serial]")
   CHECK(Symmetry(json{{"PCMatShifted", true}}, true) == MatrixSymmetry::UNSYMMETRIC);
 }
 
-TEST_CASE("Config PML complex frequency shift", "[config][Serial]")
-{
-  // For a static PML, the complex frequency shift is equivalent to a different real stretch
-  // and conductivity, and is rejected.
-  CHECK_THROWS(config::PMLData(json{{"Attributes", {2}}, {"AlphaMax", 0.5}}));
-  CHECK_THROWS(config::PMLData(json{{"Attributes", {2}}, {"AlphaMax", {0.0, 0.0, 0.5}}}));
-  CHECK_NOTHROW(config::PMLData(
-      json{{"Attributes", {2}}, {"AlphaMax", 0.5}, {"FrequencyDependent", true}}));
-  CHECK_NOTHROW(config::PMLData(json{{"Attributes", {2}}, {"AlphaMax", 0.0}}));
-}
-
 TEST_CASE("Config PML conductivity", "[config][Serial]")
 {
   // By default, σ_max is computed from the size of the PML elements, unless a reflection
@@ -1213,13 +1202,13 @@ TEST_CASE("Config PML regions", "[config][Serial]")
 
   // Several PML blocks, with their own parameters and disjoint attributes.
   domains["PML"] = json::array({json{{"Attributes", {2}}, {"Order", 2}},
-                                json{{"Attributes", {3}}, {"FrequencyDependent", true}}});
+                                json{{"Attributes", {3}}, {"KappaMax", 2.0}}});
   const config::DomainData blocks(domains);
   REQUIRE(blocks.pml.size() == 2);
   CHECK(blocks.pml[0].order == 2);
-  CHECK(!blocks.pml[0].frequency_dependent);
+  CHECK(blocks.pml[0].kappa_max[2] == 1.0);
   CHECK(blocks.pml[1].order == 3);
-  CHECK(blocks.pml[1].frequency_dependent);
+  CHECK(blocks.pml[1].kappa_max[2] == 2.0);
   domains["PML"][1]["Attributes"] = {3, 2};
   CHECK_THROWS(config::DomainData(domains));
 
@@ -2334,7 +2323,6 @@ TEST_CASE("ConcretizeDefaults", "[config][Serial]")
 
     auto &j_pml = config["Domains"]["PML"][0];
     CHECK(j_pml["ReferenceFrequency"].get<double>() == 1.0);
-    CHECK(j_pml["FrequencyDependent"].get<bool>() == false);
     CHECK(j_pml["AllowRefinement"].get<bool>() == false);
     CHECK(j_pml["SigmaMax"] == "Auto");
 

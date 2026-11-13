@@ -279,182 +279,6 @@ TEST_CASE("CPU preconditioner quadrature data preserves the multigrid operators"
   }
 }
 
-TEST_CASE("SpaceOperator frequency-dependent PML at complex frequency",
-          "[spaceoperator][pml][Serial][Parallel][GPU]")
-{
-  using namespace std::complex_literals;
-
-  // Unit cube with a PML layer z ∈ [0.75, 1] (attribute 2).
-  MPI_Comm comm = Mpi::World();
-  mfem::Mesh serial_mesh = mfem::Mesh::MakeCartesian3D(4, 4, 4, mfem::Element::HEXAHEDRON);
-  for (int i = 0; i < serial_mesh.GetNE(); i++)
-  {
-    mfem::Vector center;
-    serial_mesh.GetElementCenter(i, center);
-    serial_mesh.SetAttribute(i, (center(2) > 0.75) ? 2 : 1);
-  }
-  serial_mesh.SetAttributes();
-  std::vector<std::unique_ptr<Mesh>> mesh;
-  mesh.push_back(std::make_unique<Mesh>(comm, serial_mesh));
-
-  IntegrationSettingsGuard settings_guard;
-  config::SolverData solver;
-  solver.order = 2;
-  solver.linear.mg_max_levels = 1;
-  solver.linear.pc_mat_real = false;
-  solver.linear.pc_mat_shifted = 0;
-  fem::DefaultIntegrationOrder::p_trial = solver.order;
-
-  constexpr double omega0 = 2.0;
-  auto MakeSpaceOperator = [&](bool frequency_dependent)
-  {
-    config::MaterialData vacuum, pml;
-    vacuum.attributes = {1};
-    pml.attributes = {2};
-    pml.epsilon_r.s = {2.0, 2.0, 2.0};
-    config::PMLData pml_pml;
-    pml_pml.autodetect_geometry = false;
-    pml_pml.directions = {false, false, false, false, false, true};
-    pml_pml.thickness = {0.0, 0.0, 0.0, 0.0, 0.0, 0.25};
-    pml_pml.kappa_max = {1.0, 1.0, 1.5};
-    pml_pml.alpha_max = {0.0, 0.0, 0.2};
-    pml_pml.frequency_dependent = frequency_dependent;
-    pml_pml.reference_frequency = omega0;
-    config::DomainData domains;
-    domains.attributes = {1, 2};
-    domains.materials = {vacuum, pml};
-    domains.pml = {pml_pml};
-    domains.pml[0].attributes = pml.attributes;
-    config::BoundaryData boundaries;
-    Units units(1.0, 1.0);
-    return std::make_unique<SpaceOperator>(solver, domains, boundaries,
-                                           ProblemType::EIGENMODE, units, mesh);
-  };
-  auto fd_op = MakeSpaceOperator(true);
-  const ComplexOperator *C0 = nullptr;
-  REQUIRE(fd_op->GetMaterialOp().HasPML());
-  REQUIRE(fd_op->GetMaterialOp().HasFrequencyDependentPML());
-
-  ComplexVector x(fd_op->GetNDSpace().GetTrueVSize()), y1(x.Size()), y2(x.Size());
-  x.UseDevice(true);
-  y1.UseDevice(true);
-  y2.UseDevice(true);
-  x.Real().Randomize(42 + Mpi::Rank(comm));
-  x.Imag().Randomize(314159 + Mpi::Rank(comm));
-  auto RelErr = [&](ComplexVector &a, const ComplexVector &b)
-  {
-    a.Add(-1.0, b);
-    return linalg::Norml2(comm, a) / linalg::Norml2(comm, b);
-  };
-  auto A2 = [&](std::complex<double> omega)
-  {
-    auto op = fd_op->GetExtraSystemMatrix(omega, Operator::DIAG_ZERO);
-    REQUIRE(op);
-    return op;
-  };
-
-  SECTION("Complex frequency overload matches the real frequency one for real ω")
-  {
-    auto A2r = fd_op->GetExtraSystemMatrix<ComplexOperator>(omega0, Operator::DIAG_ZERO);
-    REQUIRE(A2r);
-    A2r->Mult(x, y1);
-    A2(omega0)->Mult(x, y2);
-    CHECK_THAT(RelErr(y2, y1), Catch::Matchers::WithinAbs(0.0, 1.0e-14));
-  }
-
-  SECTION("System matrix at real ω matches the static PML with ω₀ = ω")
-  {
-    auto static_op = MakeSpaceOperator(false);
-    REQUIRE(!static_op->GetMaterialOp().HasFrequencyDependentPML());
-    auto Ks = static_op->GetStiffnessMatrix<ComplexOperator>(Operator::DIAG_ZERO);
-    auto Ms = static_op->GetMassMatrix<ComplexOperator>(Operator::DIAG_ZERO);
-    auto As = static_op->GetSystemMatrix(1.0 + 0.0i, 0.0 + 0.0i, -omega0 * omega0 + 0.0i,
-                                         Ks.get(), C0, Ms.get());
-    auto Kf = fd_op->GetStiffnessMatrix<ComplexOperator>(Operator::DIAG_ZERO);
-    auto Mf = fd_op->GetMassMatrix<ComplexOperator>(Operator::DIAG_ZERO);
-    auto A2f = A2(omega0);
-    auto Af = fd_op->GetSystemMatrix(1.0 + 0.0i, 0.0 + 0.0i, -omega0 * omega0 + 0.0i,
-                                     Kf.get(), C0, Mf.get(), A2f.get());
-    As->Mult(x, y1);
-    Af->Mult(x, y2);
-    CHECK_THAT(RelErr(y2, y1), Catch::Matchers::WithinAbs(0.0, 1.0e-13));
-  }
-
-  SECTION("Frozen-stretch PML matrices are the static PML matrices")
-  {
-    // The frozen-stretch matrices at ω₀ reproduce A2(ω₀) and the static PML terms of the
-    // stiffness and mass matrices for the reference frequency ω₀.
-    auto P = fd_op->GetFrozenPMLMatrices(omega0, Operator::DIAG_ZERO);
-    REQUIRE(P[0]);
-    REQUIRE(!P[1]);
-    REQUIRE(P[2]);
-    ComplexVector t(x.Size());
-    t.UseDevice(true);
-    P[0]->Mult(x, y1);
-    P[2]->Mult(x, t);
-    y1.Add(-omega0 * omega0, t);
-    A2(omega0)->Mult(x, y2);
-    CHECK_THAT(RelErr(y1, y2), Catch::Matchers::WithinAbs(0.0, 1.0e-14));
-
-    auto static_op = MakeSpaceOperator(false);
-    auto Ks = static_op->GetStiffnessMatrix<ComplexOperator>(Operator::DIAG_ZERO);
-    auto Kf = fd_op->GetStiffnessMatrix<ComplexOperator>(Operator::DIAG_ZERO);
-    Ks->Mult(x, y1);
-    Kf->Mult(x, y2);
-    P[0]->AddMult(x, y2);
-    CHECK_THAT(RelErr(y2, y1), Catch::Matchers::WithinAbs(0.0, 1.0e-14));
-    auto Ms = static_op->GetMassMatrix<ComplexOperator>(Operator::DIAG_ZERO);
-    auto Mf = fd_op->GetMassMatrix<ComplexOperator>(Operator::DIAG_ZERO);
-    Ms->Mult(x, y1);
-    Mf->Mult(x, y2);
-    P[2]->AddMult(x, y2);
-    CHECK_THAT(RelErr(y2, y1), Catch::Matchers::WithinAbs(0.0, 1.0e-14));
-
-    // Without the PML terms, A2 is empty.
-    CHECK(!fd_op->GetExtraSystemMatrix(std::complex<double>(omega0, 0.3),
-                                       Operator::DIAG_ZERO, false));
-  }
-
-  SECTION("A2(ω) is the analytic continuation in ω")
-  {
-    // Cauchy-Riemann equations for the operator action, with central differences.
-    const std::complex<double> omega = {omega0, 0.3};
-    const double h = 1.0e-5;
-    ComplexVector t(x.Size());
-    t.UseDevice(true);
-    A2(omega + h)->Mult(x, y1);
-    A2(omega - h)->Mult(x, t);
-    y1.Add(-1.0, t);  // ∂A2/∂Re{ω} x (2 h)
-    A2(omega + 1i * h)->Mult(x, y2);
-    A2(omega - 1i * h)->Mult(x, t);
-    y2.Add(-1.0, t);
-    y2 *= -1i;  // -i ∂A2/∂Im{ω} x (2 h) = ∂A2/∂Re{ω} x (2 h)
-    CHECK_THAT(RelErr(y2, y1), Catch::Matchers::WithinAbs(0.0, 1.0e-8));
-
-    // The stretch is evaluated at the complex frequency, not its real part.
-    A2(omega)->Mult(x, y1);
-    A2(omega.real())->Mult(x, y2);
-    CHECK(RelErr(y2, y1) > 1.0e-3);
-  }
-
-  SECTION("Preconditioner matches the system matrix at complex ω")
-  {
-    const std::complex<double> omega = {omega0, 0.3}, lambda = 1i * omega;
-    auto K = fd_op->GetStiffnessMatrix<ComplexOperator>(Operator::DIAG_ZERO);
-    auto M = fd_op->GetMassMatrix<ComplexOperator>(Operator::DIAG_ZERO);
-    auto A2c = A2(omega);
-    auto A = fd_op->GetSystemMatrix(1.0 + 0.0i, lambda, lambda * lambda, K.get(), C0,
-                                    M.get(), A2c.get());
-    auto P = fd_op->GetPreconditionerMatrix<ComplexOperator>(1.0 + 0.0i, lambda,
-                                                             lambda * lambda, omega);
-    const auto *mg = dynamic_cast<const ComplexMultigridOperator *>(P.get());
-    REQUIRE(mg);
-    A->Mult(x, y1);
-    mg->GetFinestOperator().Mult(x, y2);
-    CHECK_THAT(RelErr(y2, y1), Catch::Matchers::WithinAbs(0.0, 1.0e-12));
-  }
-}
-
 TEST_CASE("SpaceOperator real-valued coarse solve with PML regions",
           "[spaceoperator][pml][Serial][Parallel][GPU]")
 {
@@ -557,7 +381,7 @@ TEST_CASE("SpaceOperator real-valued coarse solve with PML regions",
   }
 }
 
-TEST_CASE("SpaceOperator PML blocks with static and frequency-dependent stretches",
+TEST_CASE("SpaceOperator PML blocks with their own stretch",
           "[spaceoperator][pml][Serial][Parallel]")
 {
   using namespace std::complex_literals;
@@ -584,13 +408,12 @@ TEST_CASE("SpaceOperator PML blocks with static and frequency-dependent stretche
   fem::DefaultIntegrationOrder::p_trial = solver.order;
 
   constexpr double omega0 = 2.0;
-  auto MakeBlock = [](std::vector<int> attributes, int order, bool frequency_dependent)
+  auto MakeBlock = [](std::vector<int> attributes, int order)
   {
     config::PMLData pml;
     pml.attributes = std::move(attributes);
     pml.order = order;
     pml.kappa_max = {1.0, 1.0, 1.5};
-    pml.frequency_dependent = frequency_dependent;
     pml.reference_frequency = omega0;
     return pml;
   };
@@ -637,28 +460,17 @@ TEST_CASE("SpaceOperator PML blocks with static and frequency-dependent stretche
     return A2 != nullptr;
   };
 
-  // A static block with a different grading and a frequency-dependent block: at ω = ω₀,
-  // the system matrix is the one of two static blocks.
-  auto mixed = MakeSpaceOperator({MakeBlock({2}, 2, false), MakeBlock({3}, 3, true)});
-  REQUIRE(mixed->GetMaterialOp().GetPMLLayers().size() == 2);
-  REQUIRE(mixed->GetMaterialOp().HasFrequencyDependentPML());
-  auto both_static =
-      MakeSpaceOperator({MakeBlock({2}, 2, false), MakeBlock({3}, 3, false)});
-  REQUIRE(!both_static->GetMaterialOp().HasFrequencyDependentPML());
-  CHECK(Apply(*mixed, omega0, y1));
-  CHECK(!Apply(*both_static, omega0, y2));
-  CHECK_THAT(RelErr(y1, y2), Catch::Matchers::WithinAbs(0.0, 1.0e-13));
-
-  // At another frequency, only the frequency-dependent block changes.
-  Apply(*mixed, 1.5 * omega0, y1);
-  Apply(*both_static, 1.5 * omega0, y2);
-  CHECK(RelErr(y1, y2) > 1.0e-3);
+  // Blocks with different gradings, whose stretches are continuous across their interfaces
+  // with the physical region.
+  auto blocks = MakeSpaceOperator({MakeBlock({2}, 2), MakeBlock({3}, 3)});
+  REQUIRE(blocks->GetMaterialOp().GetPMLLayers().size() == 2);
+  CHECK(!Apply(*blocks, omega0, y1));
 
   // Blocks with the same parameters are a single block (σ_max is given, since by default it
   // depends on the materials of each block).
   auto Block = [&](std::vector<int> attributes)
   {
-    auto pml = MakeBlock(std::move(attributes), 3, false);
+    auto pml = MakeBlock(std::move(attributes), 3);
     pml.sigma_max = {0.0, 0.0, 20.0};
     return pml;
   };
@@ -1028,7 +840,6 @@ TEST_CASE("SpaceOperator PML operators match an MFEM coefficient reference",
   layer_pml.thickness = {0.0, 1.0 / 3.0, 0.0, 0.0, 0.0, 1.0 / 3.0};
   layer_pml.sigma_max = {3.0, 0.0, 5.0};
   layer_pml.kappa_max = {1.5, 1.0, 2.0};
-  layer_pml.alpha_max = {0.2, 0.0, 0.1};
   layer_pml.reference_frequency = 2.0;
   config::DomainData domains;
   domains.attributes = {1, 2};
@@ -1082,8 +893,7 @@ TEST_CASE("SpaceOperator PML operators match an MFEM coefficient reference",
       const double shape = std::pow(std::min(r, 1.0), p.order);
       const bool pos = (xp[a] > p.geometry.inner[2 * a + 1]);
       const double sigma = shape * p.sigma_max[2 * a + (pos ? 1 : 0)];
-      s[a] = 1.0 + (p.kappa_max[a] - 1.0) * shape +
-             sigma / (p.alpha_max[a] * shape + 1i * p.reference_frequency);
+      s[a] = 1.0 + (p.kappa_max[a] - 1.0) * shape + sigma / (1i * p.reference_frequency);
     }
     return s;
   };
@@ -1181,11 +991,10 @@ namespace
 // Unit cube of tetrahedra (or hexahedra) with a lossy dielectric (attribute 1, z < 1/3) and
 // vacuum (attribute 3), under a Cartesian PML layer on +z (attribute 2, z > 2/3) with the
 // lossy dielectric as background, or the cube of the lossy dielectric with a layer of
-// prisms (or hexahedra) extruded from its boundary (attribute 2), static or
-// frequency-dependent with α > 0.
+// prisms (or hexahedra) extruded from its boundary (attribute 2).
 std::unique_ptr<SpaceOperator>
-MakePMLSpaceOperator(std::vector<std::unique_ptr<Mesh>> &mesh, bool frequency_dependent,
-                     int order = 2, int mg_max_levels = 1, bool extruded = false,
+MakePMLSpaceOperator(std::vector<std::unique_ptr<Mesh>> &mesh, int order = 2,
+                     int mg_max_levels = 1, bool extruded = false,
                      mfem::Element::Type element = mfem::Element::TETRAHEDRON)
 {
   auto serial_mesh =
@@ -1218,8 +1027,6 @@ MakePMLSpaceOperator(std::vector<std::unique_ptr<Mesh>> &mesh, bool frequency_de
     pml.thickness = {0.0, 0.0, 0.0, 0.0, 0.0, 1.0 / 3.0};
   }
   pml.kappa_max.fill(1.5);
-  pml.frequency_dependent = frequency_dependent;
-  pml.alpha_max.fill(frequency_dependent ? 0.3 : 0.0);
   pml.reference_frequency = 2.0;
   mesh.clear();
   mesh.push_back(std::make_unique<Mesh>(Mpi::World(), *serial_mesh));
@@ -1437,14 +1244,12 @@ TEST_CASE("SpaceOperator PML quadrature data matches an MFEM reference",
           "[spaceoperator][pml][Serial][Parallel][GPU]")
 {
   // Every PML term and output part with the stored tensors, against MFEM integrators with
-  // the tensors evaluated on the host, for a static stretch and a frequency-dependent one
-  // with α > 0, of a Cartesian and of an extruded layer on hexahedra.
-  const bool frequency_dependent = GENERATE(false, true);
+  // the tensors evaluated on the host, of a Cartesian and of an extruded layer on
+  // hexahedra.
   const bool extruded = GENERATE(false, true);
   IntegrationSettingsGuard settings_guard;
   std::vector<std::unique_ptr<Mesh>> mesh;
-  auto space_op = MakePMLSpaceOperator(mesh, frequency_dependent, 2, 1, extruded,
-                                       mfem::Element::HEXAHEDRON);
+  auto space_op = MakePMLSpaceOperator(mesh, 2, 1, extruded, mfem::Element::HEXAHEDRON);
   REQUIRE(space_op->GetMaterialOp().GetPMLLayers()[0].GetStretch().extruded == extruded);
   const auto &layer = space_op->GetMaterialOp().GetPMLLayers()[0];
   const auto &nd = space_op->GetNDSpace(), &h1 = space_op->GetH1Space();
@@ -1453,7 +1258,6 @@ TEST_CASE("SpaceOperator PML quadrature data matches an MFEM reference",
   pml::ContextHeader header;
   header.c_muinv = {0.7, -0.4};
   header.c_eps = {1.3, 0.2};
-  header.omega = 1.1;
   const std::array<double, 3> k = {0.3, -0.2, 0.5};
   header.wave_vector_cross = {0.0, k[2], -k[1], -k[2], 0.0, k[0], k[1], -k[0], 0.0};
   for (auto part :
@@ -1781,9 +1585,9 @@ TEST_CASE("Driven system operator from the preconditioner",
 
   SECTION("PML region")
   {
-    // The PML integrators of a static or frequency-dependent stretch, on the lossy
-    // material as background, are in the stiffness, damping and mass matrices, or in the
-    // extra system matrix. The layer is z > 1/2, under the surface impedance boundary.
+    // The PML integrators, on the lossy material as background, are in the stiffness,
+    // damping and mass matrices. The layer is z > 1/2, under the surface impedance
+    // boundary.
     for (int i = 0; i < serial_mesh.GetNE(); i++)
     {
       mfem::Vector center;
@@ -1804,16 +1608,12 @@ TEST_CASE("Driven system operator from the preconditioner",
     pml.directions = {false, false, false, false, false, true};
     pml.thickness = {0.0, 0.0, 0.0, 0.0, 0.0, 0.5};
     pml.kappa_max = {1.0, 1.0, 1.5};
-    pml.frequency_dependent = GENERATE(false, true);
-    pml.alpha_max = {0.0, 0.0, pml.frequency_dependent ? 0.2 : 0.0};
     pml.reference_frequency = 1.5;
-    CAPTURE(pml.frequency_dependent);
     domains.attributes = {1, 2, 3};
     domains.materials.push_back(background);
     domains.pml = {pml};
     SpaceOperator space_op(solver, domains, boundaries, ProblemType::DRIVEN, units, mesh);
     REQUIRE(space_op.GetMaterialOp().HasPML());
-    REQUIRE(space_op.GetMaterialOp().HasFrequencyDependentPML() == pml.frequency_dependent);
     CheckSystemOperator(boundaries);
   }
 }

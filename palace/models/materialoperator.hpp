@@ -168,15 +168,8 @@ public:
   bool HasFloquetFrequencyScaling() const { return floquet_omega_ref > 0.0; }
   double GetFloquetOmegaRef() const { return floquet_omega_ref; }
   // Cartesian PML regions (see models/pml.hpp), only for 3D frequency domain problems, in
-  // blocks with their own stretch. A frequency-dependent stretch is evaluated at the solve
-  // frequency, so that the PML terms contribute to the frequency-dependent part A2(ω) of
-  // the system matrix.
+  // blocks with their own stretch.
   bool HasPML() const { return !pml_layers.empty(); }
-  bool HasFrequencyDependentPML() const
-  {
-    return std::ranges::any_of(pml_layers, [](const pml::Layer &layer)
-                               { return layer.IsFrequencyDependent(); });
-  }
   const std::vector<pml::Layer> &GetPMLLayers() const { return pml_layers; }
 
   // Attributes of the PML regions of all blocks (global mesh attributes, sorted).

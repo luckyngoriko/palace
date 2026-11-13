@@ -131,18 +131,18 @@ as a shell of a few elements around a box-shaped physical domain and to list its
 
 The uniaxial PML terminates an axis-aligned, box-shaped physical domain by stretching the
 coordinate normal to each face of the box with the complex factor
-``s = \kappa + \sigma / (\varepsilon_0 (\alpha + i\omega))``, where ``\kappa``,
-``\sigma``, and ``\alpha`` are graded polynomially from their values at the interface with
-the physical domain (1, 0, and 0) to `"KappaMax"`, `"SigmaMax"`, and ``2\pi`` `"AlphaMax"`
-at the outer edge of the layer. Layers on several faces, including the edge and corner
-regions of the box, are supported. By default, the faces and thicknesses of the layer of a
-block are detected by comparing the bounding boxes of the physical (non-PML) region and of
-the PML regions of the block. Alternatively, they can be specified using `"Direction"` and
-`"Thickness"`, which is required for the blocks whose PML regions do not lie outside of the
-bounding box of the physical region (the thickness is measured inward from the bounding box
-of the PML regions of the block). A real stretch `"KappaMax"` > 1 improves the absorption of
-evanescent waves, when near fields reach the layer, but reduces the accuracy for propagating
-waves on a given mesh.
+``s = \kappa + \sigma / (i \varepsilon_0 \omega_0)``, where ``\kappa`` and ``\sigma``
+are graded polynomially from their values at the interface with the physical domain (1 and
+0) to `"KappaMax"` and `"SigmaMax"` at the outer edge of the layer, and ``\omega_0`` is
+the angular frequency of `"ReferenceFrequency"`. Layers on several faces, including the
+edge and corner regions of the box, are supported. By default, the faces and thicknesses of
+the layer of a block are detected by comparing the bounding boxes of the physical (non-PML)
+region and of the PML regions of the block. Alternatively, they can be specified using
+`"Direction"` and `"Thickness"`, which is required for the blocks whose PML regions do not
+lie outside of the bounding box of the physical region (the thickness is measured inward
+from the bounding box of the PML regions of the block). A real stretch `"KappaMax"` > 1
+improves the absorption of evanescent waves, when near fields reach the layer, but reduces
+the accuracy for propagating waves on a given mesh.
 
 The PML regions of a block may have different materials (a layered background medium, when
 a material interface crosses the layer) and elements of any type (for example prisms and
@@ -240,13 +240,10 @@ a distance of at least about ``\lambda / 2\pi`` from the radiating structures, a
 lowest frequency of interest. Otherwise, a weaker absorption (a larger `"ReflectionTarget"`)
 reduces the spurious losses, at the cost of larger reflections of the propagating waves.
 
-By default, the stretch factors are evaluated at a fixed `"ReferenceFrequency"`: the lowest
+The stretch factors are evaluated at a fixed `"ReferenceFrequency"`, by default the lowest
 frequency for driven simulations, or the target frequency for eigenmode simulations. This
-static PML keeps the system matrices independent of frequency, and so eigenmode problems
-remain linear, while the absorption in the layer grows with frequency. With
-`"FrequencyDependent": true`, the stretch factors are instead evaluated at the solve
-frequency, for an absorption independent of frequency, and a complex frequency shift
-`"AlphaMax"` can be added (CFS-PML), which reduces the absorption below this frequency.
+keeps the system matrices independent of frequency, and so eigenmode problems remain
+linear, while the absorption in the layer grows with frequency.
 
 ### Eigenmode simulations and postprocessing with PML regions
 
@@ -286,12 +283,11 @@ Sample configurations are provided in the
 [`examples/pml_layered`](https://github.com/awslabs/palace/blob/main/examples/pml_layered),
 and [`examples/pml_oblique`](https://github.com/awslabs/palace/blob/main/examples/pml_oblique)
 directories: a rectangular waveguide terminated by a PML (driven simulations, also with a
-PML extruded from its end, an adaptive sweep with circuit synthesis, eigenmode simulations
-of a cavity coupled to the waveguide through an iris, and an E-plane bifurcation whose arms
-of different lengths are terminated by two PML blocks), a layered substrate and vacuum
-parallel-plate waveguide whose material interface crosses the PML, and a periodic cell with
-a Floquet port for plane-wave absorption at oblique incidence (at grazing incidence, and
-with an adaptive sweep at 45°).
+PML extruded from its end, eigenmode simulations of a cavity coupled to the waveguide
+through an iris, and an E-plane bifurcation whose arms of different lengths are terminated
+by two PML blocks), a layered substrate and vacuum parallel-plate waveguide whose material
+interface crosses the PML, and a periodic cell with a Floquet port for plane-wave absorption
+at oblique incidence (at grazing incidence, and with an adaptive sweep at 45°).
 
 ## Finite conductivity boundary
 

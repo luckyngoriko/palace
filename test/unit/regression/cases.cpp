@@ -2176,13 +2176,12 @@ TEST_CASE("pml_waveguide_extruded", "[Serial][Parallel][GPU][Regression]")
 }
 
 // E-plane bifurcation with arms of different lengths, each terminated by its own block of
-// PML regions (one static, one frequency-dependent with a real stretch and a complex
-// frequency shift). The complex S11 (|S11| ~ -19 dB, the
-// reflection of the bifurcation) is diffed against the reference, and against the
-// PML-independent values of the same bifurcation with arms of equal lengths terminated by a
-// single PML block (separate mesh). The atol of 4e-3 covers the discretization differences
-// of the two meshes (~1.5e-3), while a poorly absorbing PML (reflection target 1e-2 in the
-// shorter arm) is off by 1e-2 to 2e-2.
+// PML regions (the one of the shorter arm with a real stretch). The complex S11 (|S11| ~
+// -19 dB, the reflection of the bifurcation) is diffed against the reference, and against
+// the PML-independent values of the same bifurcation with arms of equal lengths terminated
+// by a single PML block (separate mesh). The atol of 4e-3 covers the discretization
+// differences of the two meshes (~1.5e-3), while a poorly absorbing PML (reflection target
+// 1e-2 in the shorter arm) is off by 1e-2 to 2e-2.
 palace::test::CustomCheck TestPMLBifurcation(double atol_ref, double atol_pml)
 {
   // (f (GHz), |S11| (dB), arg(S11) (deg.)) with arms of equal lengths.
@@ -2239,13 +2238,10 @@ TEST_CASE("pml_waveguide_bifurcation", "[Serial][Parallel][GPU][Regression]")
 }
 
 // Iris-coupled cavity: a shorted section of the waveguide coupled through an inductive iris
-// to an output section terminated by the PML. With the static stretch the eigenvalue
-// problem is linear; with the frequency-dependent stretch (evaluated at the complex
-// eigenfrequency) it is nonlinear and solved by the hybrid eigensolver seeded with the
-// stretch frozen at the target. The resonance (1.778 GHz, Q ~ 495, set by the radiation
-// through the iris) is diffed against the reference, and against the same PML-independent
-// value for both stretches: with poorly absorbing PML parameters (a reflection target of
-// 1e-2 instead of 1e-6), Q changes by 11%.
+// to an output section terminated by the PML. The resonance (1.778 GHz, Q ~ 495, set by
+// the radiation through the iris) is diffed against the reference, and against its
+// PML-independent value: with poorly absorbing PML parameters (a reflection target of 1e-2
+// instead of 1e-6), Q changes by 11%.
 palace::test::CustomCheck TestPMLCavityResonance(double rtol, double f_re, double q,
                                                  double rtol_f_re, double rtol_q)
 {
@@ -2303,50 +2299,9 @@ void RunPMLCavityCase(const std::string &config)
   palace::test::RunRegressionCase("pml_waveguide", config + ".json", config, opts);
 }
 
-// Omits [GPU]: the device code of the static PML is covered by the other GPU cases, and the
-// frequency-dependent case covers the PML eigenmode solve on GPU.
-TEST_CASE("pml_waveguide_iris_cavity", "[Serial][Parallel][Regression]")
+TEST_CASE("pml_waveguide_iris_cavity", "[Serial][Parallel][GPU][Regression]")
 {
   RunPMLCavityCase("iris_cavity");
-}
-
-TEST_CASE("pml_waveguide_iris_cavity_fd", "[Serial][Parallel][GPU][Regression]")
-{
-  RunPMLCavityCase("iris_cavity_fd");
-}
-
-// Adaptive fast frequency sweep and circuit synthesis with a frequency-dependent PML on a
-// dielectric-filled waveguide stepping into the vacuum PML region (|S11| ~ -13 dB). The PML
-// terms of the PROM are projected per frequency during the greedy sampling, fit with a
-// rational function (poles on the imaginary axis) for the online sweep, and realized with
-// auxiliary states in the synthesized circuit. The swept S-parameters match the reference
-// to the adaptive tolerance, and the synthesized S round-trips to the PROM S. Omits [GPU]
-// for its cost: the PML terms of the PROM on GPU are covered by pml_oblique_45_tm_adaptive,
-// and the rational fit and synthesis run on the host.
-TEST_CASE("pml_waveguide_fd_synth", "[Serial][Parallel][Regression]")
-{
-  palace::test::RegressionOptions opts;
-  opts.rtol = 1.0e-3;
-  opts.atol = 1.0e-11;
-  opts.skip_rowcount = true;
-  opts.min_rows = 1;
-  opts.excluded_columns = {"Error (Bkwd.)", "Error (Abs.)", "Maximum", "Minimum", "Mean"};
-  // Partition-dependent pencil matrices and eigenvectors consumed by no check here.
-  opts.unstored_files = {"rom-Linv",
-                         "rom-Rinv",
-                         "rom-C-",
-                         "rom-portload-",
-                         "rom-orthogonalization-matrix-R",
-                         "rom-coupled-S",
-                         "rom-coupled-G",
-                         "rom-coupled-H",
-                         "rom-eigenvectors"};
-  opts.excluded_files = {"rom-eigenvalues", "error-indicators.csv", "rom-port-reference",
-                         "domain-E.csv"};
-  opts.custom_checks["port-S.csv"] = TestWavePortCoupledRoundTrip(1.0e-3);
-  opts.paraview_fields = false;
-  palace::test::RunRegressionCase("pml_waveguide", "waveguide_pml_fd_synth.json",
-                                  "waveguide_pml_fd_synth", opts);
 }
 
 // Layered parallel-plate waveguide (substrate and vacuum) whose material interface crosses
@@ -2367,10 +2322,9 @@ TEST_CASE("pml_oblique_grazing_80_te", "[Serial][Parallel][GPU][Regression]")
   RunPMLDrivenCase("pml_oblique", "grazing_80_te", "port-floquet-S.csv", -38.0);
 }
 
-// Adaptive fast frequency sweep (2.5-3.5 GHz) of the oblique incidence case with a
-// frequency-dependent PML. With the Floquet wave vector, the PML terms of the PROM are not
-// symmetric: symmetrizing them drops the Floquet cross terms and the greedy sampling does
-// not converge. The TM reflection stays below -70 dB over the band.
+// Adaptive fast frequency sweep (2.5-3.5 GHz) of the oblique incidence case, with the PML
+// and Floquet terms in the stiffness, damping, and mass matrices of the PROM. The TM
+// reflection stays below -70 dB over the band.
 TEST_CASE("pml_oblique_45_tm_adaptive", "[Serial][Parallel][GPU][Regression]")
 {
   RunPMLDrivenCase("pml_oblique", "oblique_45_tm_adaptive", "port-floquet-S.csv", -70.0);

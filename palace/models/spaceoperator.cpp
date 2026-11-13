@@ -192,16 +192,9 @@ void SpaceOperator::PrintPML(const Units &units) const
     const auto &p = layer.GetStretch();
     Mpi::Print("\nConfiguring PML regions at attributes:\n");
     utils::PrettyPrint(layer.GetAttributes());
-    if (p.frequency_dependent)
-    {
-      Mpi::Print(" Frequency-dependent stretch");
-    }
-    else
-    {
-      Mpi::Print(" Static stretch at f₀ = {:.3e} GHz",
-                 units.Dimensionalize<Units::ValueType::FREQUENCY>(
-                     p.reference_frequency / (2.0 * std::numbers::pi)));
-    }
+    Mpi::Print(" Stretch at f₀ = {:.3e} GHz",
+               units.Dimensionalize<Units::ValueType::FREQUENCY>(p.reference_frequency /
+                                                                 (2.0 * std::numbers::pi)));
     Mpi::Print(", conductivity profile σ = σ_max r^{:d}\n", p.order);
     const auto sigma = [&units](double s)
     { return units.Dimensionalize<Units::ValueType::CONDUCTIVITY>(s); };
@@ -752,26 +745,15 @@ auto AssembleAuxOperators(const FiniteElementSpaceHierarchy &fespaces,
   return ops;
 }
 
-// Operators with PML terms: a static stretch, at its fixed reference frequency, contributes
-// to K, C, and M, while a frequency-dependent stretch, at the solve frequency, contributes
-// to A2(ω).
-enum class PMLFilter : char
-{
-  STATIC,
-  FREQUENCY_DEPENDENT
-};
-
 // Append the PML integrator(s) for the complex terms c_muinv μ̃⁻¹ and/or c_eps ε̃ of the
-// given kind (the prefactor not used by the kind is ignored), for each PML block whose
-// stretch is selected by filter, with a frequency-dependent stretch evaluated at omega. The
-// real part is appended to re and the imaginary part to im. For a real-valued
-// approximation (null im), or with stretch_magnitude, the tensors use the magnitudes of the
-// stretch factors (see pml::TensorPart). Nothing is appended if the terms are identically
-// zero.
+// given kind (the prefactor not used by the kind is ignored), for each PML block. The real
+// part is appended to re and the imaginary part to im. For a real-valued approximation
+// (null im), or with stretch_magnitude, the tensors use the magnitudes of the stretch
+// factors (see pml::TensorPart). Nothing is appended if the terms are identically zero.
 void AppendPML(std::vector<PMLIntegrator> &re, std::vector<PMLIntegrator> *im,
                const MaterialOperator &mat_op, PMLIntegKind kind,
-               std::complex<double> c_muinv, std::complex<double> c_eps, PMLFilter filter,
-               std::complex<double> omega = 0.0, bool stretch_magnitude = false)
+               std::complex<double> c_muinv, std::complex<double> c_eps,
+               bool stretch_magnitude = false)
 {
   const bool floquet =
       (kind == PMLIntegKind::FLOQUET_MASS || kind == PMLIntegKind::FLOQUET_CROSS ||
@@ -797,7 +779,6 @@ void AppendPML(std::vector<PMLIntegrator> &re, std::vector<PMLIntegrator> *im,
   pml::ContextHeader header;
   header.c_muinv = eps_only ? 0.0 : c_muinv;
   header.c_eps = (eps_only || kind == PMLIntegKind::CURL_CURL_MASS) ? c_eps : 0.0;
-  header.omega = omega;
   if (floquet)
   {
     const auto &kx = mat_op.GetWaveVectorCross();
@@ -805,13 +786,9 @@ void AppendPML(std::vector<PMLIntegrator> &re, std::vector<PMLIntegrator> *im,
                 "Floquet PML terms require a 3D Floquet wave vector!");
     std::copy_n(kx.Data(), 9, header.wave_vector_cross.begin());
   }
+  const bool magnitude = stretch_magnitude || !im;
   for (const auto &layer : mat_op.GetPMLLayers())
   {
-    if ((filter == PMLFilter::FREQUENCY_DEPENDENT) != layer.IsFrequencyDependent())
-    {
-      continue;
-    }
-    const bool magnitude = stretch_magnitude || !im;
     for (auto [dst, part] :
          {std::pair{&re, magnitude ? pml::TensorPart::STRETCH_MAGNITUDE_REAL
                                    : pml::TensorPart::REAL},
@@ -851,88 +828,36 @@ struct PMLPencil
   std::complex<double> a0 = 0.0, a1 = 0.0, a2 = 0.0, a2_floquet = 0.0;
 };
 
-// Append the PML integrators for the pencil terms if the stretch is selected by filter,
-// with the stretch evaluated at omega (frequency-dependent stretch) or at its reference
-// frequency (static stretch). The auxiliary space terms are the gradient subspace
-// projections of the mass terms. For a real-valued approximation (null im), the tensors use
-// the magnitudes of the stretch factors and the Floquet cross terms are dropped. With
-// stretch_magnitude, the complex-valued terms use the magnitudes of the stretch factors
-// too.
-//
-// For a frequency-dependent stretch, A2(ω) = K_pml(ω) + iω C_pml(ω) - ω² M_pml(ω). The
-// stretch factors s(ω) = κ + σ / (α + iω) and therefore the PML tensors are analytic in ω,
-// so a single complex-ω evaluation covers both the real frequencies of driven simulations
-// and the complex eigenfrequencies of the eigenmode nonlinear solve (ω = -iλ), where it
-// yields the exact analytic continuation of A2.
+// Append the PML integrators for the pencil terms, with the stretch evaluated at its
+// reference frequency. The auxiliary space terms are the gradient subspace projections of
+// the mass terms. For a real-valued approximation (null im), the tensors use the magnitudes
+// of the stretch factors and the Floquet cross terms are dropped. With stretch_magnitude,
+// the complex-valued terms use the magnitudes of the stretch factors too.
 void AppendPMLPencil(std::vector<PMLIntegrator> &re, std::vector<PMLIntegrator> *im,
                      std::vector<PMLIntegrator> *aux_re, std::vector<PMLIntegrator> *aux_im,
-                     const MaterialOperator &mat_op, PMLFilter filter,
-                     std::complex<double> omega, const PMLPencil &c,
+                     const MaterialOperator &mat_op, const PMLPencil &c,
                      bool stretch_magnitude = false)
 {
-  AppendPML(re, im, mat_op, PMLIntegKind::CURL_CURL_MASS, c.a0, c.a2, filter, omega,
-            stretch_magnitude);
+  AppendPML(re, im, mat_op, PMLIntegKind::CURL_CURL_MASS, c.a0, c.a2, stretch_magnitude);
   if (aux_re)
   {
-    AppendPML(*aux_re, aux_im, mat_op, PMLIntegKind::DIFFUSION, 0.0, c.a2, filter, omega);
+    AppendPML(*aux_re, aux_im, mat_op, PMLIntegKind::DIFFUSION, 0.0, c.a2);
   }
   if (mat_op.HasWaveVector())
   {
     const bool scaled = mat_op.HasFloquetFrequencyScaling();
     const auto c_mass = scaled ? -c.a2_floquet : c.a0, c_cross = scaled ? c.a1 : 1i * c.a0;
-    AppendPML(re, im, mat_op, PMLIntegKind::FLOQUET_MASS, c_mass, 0.0, filter, omega,
-              stretch_magnitude);
+    AppendPML(re, im, mat_op, PMLIntegKind::FLOQUET_MASS, c_mass, 0.0, stretch_magnitude);
     if (im)
     {
-      AppendPML(re, im, mat_op, PMLIntegKind::FLOQUET_CROSS, c_cross, 0.0, filter, omega,
+      AppendPML(re, im, mat_op, PMLIntegKind::FLOQUET_CROSS, c_cross, 0.0,
                 stretch_magnitude);
     }
     if (aux_re)
     {
-      AppendPML(*aux_re, aux_im, mat_op, PMLIntegKind::FLOQUET_DIFFUSION, c_mass, 0.0,
-                filter, omega);
+      AppendPML(*aux_re, aux_im, mat_op, PMLIntegKind::FLOQUET_DIFFUSION, c_mass, 0.0);
     }
   }
-}
-
-// Pencil coefficients of the frequency-dependent PML terms A2(ω), with the optionally
-// shifted mass term for preconditioning.
-PMLPencil ExtraSystemPMLPencil(std::complex<double> omega, bool shifted = false,
-                               bool shifted_floquet = false)
-{
-  return {1.0, 1i * omega, ShiftedMassCoefficient(-omega * omega, shifted),
-          ShiftedMassCoefficient(-omega * omega, shifted_floquet)};
-}
-
-// Assemble a complex-valued operator from PML integrators only (null if empty on all
-// processes).
-std::unique_ptr<ComplexOperator> AssemblePMLOperator(const FiniteElementSpace &fespace,
-                                                     const mfem::Array<int> &dbc_tdof_list,
-                                                     std::vector<PMLIntegrator> &pml_re,
-                                                     std::vector<PMLIntegrator> &pml_im,
-                                                     Operator::DiagonalPolicy diag_policy)
-{
-  int empty[2] = {pml_re.empty(), pml_im.empty()};
-  Mpi::GlobalMin(2, empty, fespace.GetComm());
-  if (empty[0] && empty[1])
-  {
-    return {};
-  }
-  constexpr bool skip_zeros = false;
-  std::unique_ptr<Operator> ar, ai;
-  if (!empty[0])
-  {
-    ar = AssembleOperator(fespace, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
-                          nullptr, skip_zeros, false, &pml_re);
-  }
-  if (!empty[1])
-  {
-    ai = AssembleOperator(fespace, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
-                          nullptr, skip_zeros, false, &pml_im);
-  }
-  auto A = std::make_unique<ComplexParOperator>(std::move(ar), std::move(ai), fespace);
-  A->SetEssentialTrueDofs(dbc_tdof_list, diag_policy);
-  return A;
 }
 
 // The PML terms are complex-valued (and only set up for frequency domain problems).
@@ -978,10 +903,9 @@ SpaceOperator::GetStiffnessMatrix(Operator::DiagonalPolicy diag_policy)
     AddStiffnessPeriodicBdrCoefficients(1.0, fpb);
   }
 
-  // Static PML stretch (a frequency-dependent stretch contributes to GetExtraSystemMatrix).
+  // PML terms.
   std::vector<PMLIntegrator> pml_re, pml_im;
-  AppendPMLPencil(pml_re, &pml_im, nullptr, nullptr, mat_op, PMLFilter::STATIC, 0.0,
-                  {.a0 = 1.0});
+  AppendPMLPencil(pml_re, &pml_im, nullptr, nullptr, mat_op, {.a0 = 1.0});
 
   int empty[2] = {AreExactlyZero(df, f, fb, fpb) && pml_re.empty(),
                   fc.IsExactlyZero() && pml_im.empty()};
@@ -1036,10 +960,9 @@ SpaceOperator::GetDampingMatrix(Operator::DiagonalPolicy diag_policy)
     AddImagPeriodicCoefficients(1.0, fp);
     AddDampingPeriodicBdrCoefficients(1.0, frb);
   }
-  // Static PML stretch.
+  // PML terms.
   std::vector<PMLIntegrator> pml_re, pml_im;
-  AppendPMLPencil(pml_re, &pml_im, nullptr, nullptr, mat_op, PMLFilter::STATIC, 0.0,
-                  {.a1 = 1.0});
+  AppendPMLPencil(pml_re, &pml_im, nullptr, nullptr, mat_op, {.a1 = 1.0});
   int empty[2] = {AreExactlyZero(f, fb, fp, frb) && pml_re.empty(), pml_im.empty()};
   Mpi::GlobalMin(2, empty, GetComm());
   if (empty[0] && empty[1])
@@ -1091,9 +1014,9 @@ std::unique_ptr<OperType> SpaceOperator::GetMassMatrix(Operator::DiagonalPolicy 
   {
     AddImagMassCoefficients(1.0, fi);
   }
-  // Static PML stretch.
+  // PML terms.
   std::vector<PMLIntegrator> pml_re, pml_im;
-  AppendPMLPencil(pml_re, &pml_im, nullptr, nullptr, mat_op, PMLFilter::STATIC, 0.0,
+  AppendPMLPencil(pml_re, &pml_im, nullptr, nullptr, mat_op,
                   {.a2 = 1.0, .a2_floquet = 1.0});
   int empty[2] = {AreExactlyZero(fr, fbr) && pml_re.empty(),
                   AreExactlyZero(fi, fbi) && pml_im.empty()};
@@ -1139,7 +1062,7 @@ SpaceOperator::GetExtraSystemMatrix(double omega, Operator::DiagonalPolicy diag_
 template <OperatorType OperType>
 std::unique_ptr<OperType>
 SpaceOperator::GetExtraSystemMatrix(double omega, Operator::DiagonalPolicy diag_policy,
-                                    bool include_wave_ports, bool include_pml)
+                                    bool include_wave_ports)
 {
   PrintHeader(GetH1Space(), GetNDSpace(), GetRTSpace(), print_hdr);
   MaterialPropertyCoefficient dfbr(mat_op.MaxCeedBdrAttribute()),
@@ -1149,18 +1072,8 @@ SpaceOperator::GetExtraSystemMatrix(double omega, Operator::DiagonalPolicy diag_
       fpbi(mat_op.MaxCeedBdrAttribute());
   AddExtraSystemBdrCoefficients(omega, dfbr, dfbi, fbr, fbi, frbr, frbi, &fpbr, &fpbi,
                                 include_wave_ports);
-
-  // Frequency-dependent PML stretch, evaluated at ω.
-  CheckPMLOperatorType<OperType>(mat_op);
-  std::vector<PMLIntegrator> pml_re, pml_im;
-  if (include_pml)
-  {
-    AppendPMLPencil(pml_re, &pml_im, nullptr, nullptr, mat_op,
-                    PMLFilter::FREQUENCY_DEPENDENT, omega, ExtraSystemPMLPencil(omega));
-  }
-
-  int empty[2] = {AreExactlyZero(dfbr, fbr, frbr, fpbr) && pml_re.empty(),
-                  AreExactlyZero(dfbi, fbi, frbi, fpbi) && pml_im.empty()};
+  int empty[2] = {AreExactlyZero(dfbr, fbr, frbr, fpbr),
+                  AreExactlyZero(dfbi, fbi, frbi, fpbi)};
   Mpi::GlobalMin(2, empty, GetComm());
   if (empty[0] && empty[1])
   {
@@ -1171,12 +1084,12 @@ SpaceOperator::GetExtraSystemMatrix(double omega, Operator::DiagonalPolicy diag_
   if (!empty[0])
   {
     ar = AssembleOperator(GetNDSpace(), nullptr, nullptr, &dfbr, &fbr, nullptr, &frbr,
-                          &fpbr, skip_zeros, false, &pml_re);
+                          &fpbr, skip_zeros);
   }
   if (!empty[1])
   {
     ai = AssembleOperator(GetNDSpace(), nullptr, nullptr, &dfbi, &fbi, nullptr, &frbi,
-                          &fpbi, skip_zeros, false, &pml_im);
+                          &fpbi, skip_zeros);
   }
   if constexpr (std::is_same_v<OperType, ComplexOperator>)
   {
@@ -1196,13 +1109,13 @@ SpaceOperator::GetExtraSystemMatrix(double omega, Operator::DiagonalPolicy diag_
 
 std::unique_ptr<ComplexOperator>
 SpaceOperator::GetExtraSystemMatrix(std::complex<double> omega,
-                                    Operator::DiagonalPolicy diag_policy, bool include_pml)
+                                    Operator::DiagonalPolicy diag_policy)
 {
   // Complex-ω A2(λ) for the eigenmode nonlinear solve: identical assembly to the real-ω
-  // overload but the frequency-dependent terms (2nd-order ABC, surface conductivity,
-  // rational impedance, numeric wave ports, frequency-dependent PML) are evaluated at the
-  // genuinely complex frequency (ω = -i·λ). Always returns a ComplexOperator since these
-  // terms carry a real-slot contribution at complex ω.
+  // overload but the frequency-dependent boundary terms (2nd-order ABC, surface
+  // conductivity, rational impedance, numeric wave ports) are evaluated at the genuinely
+  // complex frequency (ω = -i·λ). Always returns a ComplexOperator since these terms
+  // carry a real-slot contribution at complex ω.
   PrintHeader(GetH1Space(), GetNDSpace(), GetRTSpace(), print_hdr);
   MaterialPropertyCoefficient dfbr(mat_op.MaxCeedBdrAttribute()),
       dfbi(mat_op.MaxCeedBdrAttribute()), fbr(mat_op.MaxCeedBdrAttribute()),
@@ -1210,14 +1123,8 @@ SpaceOperator::GetExtraSystemMatrix(std::complex<double> omega,
       frbi(mat_op.MaxCeedBdrAttribute()), fpbr(mat_op.MaxCeedBdrAttribute()),
       fpbi(mat_op.MaxCeedBdrAttribute());
   AddExtraSystemBdrCoefficients(omega, dfbr, dfbi, fbr, fbi, frbr, frbi, &fpbr, &fpbi);
-  std::vector<PMLIntegrator> pml_re, pml_im;
-  if (include_pml)
-  {
-    AppendPMLPencil(pml_re, &pml_im, nullptr, nullptr, mat_op,
-                    PMLFilter::FREQUENCY_DEPENDENT, omega, ExtraSystemPMLPencil(omega));
-  }
-  int empty[2] = {AreExactlyZero(dfbr, fbr, frbr, fpbr) && pml_re.empty(),
-                  AreExactlyZero(dfbi, fbi, frbi, fpbi) && pml_im.empty()};
+  int empty[2] = {AreExactlyZero(dfbr, fbr, frbr, fpbr),
+                  AreExactlyZero(dfbi, fbi, frbi, fpbi)};
   Mpi::GlobalMin(2, empty, GetComm());
   if (empty[0] && empty[1])
   {
@@ -1228,46 +1135,16 @@ SpaceOperator::GetExtraSystemMatrix(std::complex<double> omega,
   if (!empty[0])
   {
     ar = AssembleOperator(GetNDSpace(), nullptr, nullptr, &dfbr, &fbr, nullptr, &frbr,
-                          &fpbr, skip_zeros, false, &pml_re);
+                          &fpbr, skip_zeros);
   }
   if (!empty[1])
   {
     ai = AssembleOperator(GetNDSpace(), nullptr, nullptr, &dfbi, &fbi, nullptr, &frbi,
-                          &fpbi, skip_zeros, false, &pml_im);
+                          &fpbi, skip_zeros);
   }
   auto A = std::make_unique<ComplexParOperator>(std::move(ar), std::move(ai), GetNDSpace());
   A->SetEssentialTrueDofs(nd_dbc_tdof_lists.back(), diag_policy);
   return A;
-}
-
-std::array<std::unique_ptr<ComplexOperator>, 3>
-SpaceOperator::GetFrozenPMLMatrices(double omega, Operator::DiagonalPolicy diag_policy)
-{
-  PrintHeader(GetH1Space(), GetNDSpace(), GetRTSpace(), print_hdr);
-  std::array<std::unique_ptr<ComplexOperator>, 3> ops;
-  const std::array<PMLPencil, 3> terms = {
-      {{.a0 = 1.0}, {.a1 = 1.0}, {.a2 = 1.0, .a2_floquet = 1.0}}};
-  for (std::size_t k = 0; k < terms.size(); k++)
-  {
-    std::vector<PMLIntegrator> pml_re, pml_im;
-    AppendPMLPencil(pml_re, &pml_im, nullptr, nullptr, mat_op,
-                    PMLFilter::FREQUENCY_DEPENDENT, omega, terms[k]);
-    ops[k] = AssemblePMLOperator(GetNDSpace(), nd_dbc_tdof_lists.back(), pml_re, pml_im,
-                                 diag_policy);
-  }
-  return ops;
-}
-
-std::unique_ptr<ComplexOperator>
-SpaceOperator::GetExtraSystemPMLMatrix(std::complex<double> omega,
-                                       Operator::DiagonalPolicy diag_policy)
-{
-  PrintHeader(GetH1Space(), GetNDSpace(), GetRTSpace(), print_hdr);
-  std::vector<PMLIntegrator> pml_re, pml_im;
-  AppendPMLPencil(pml_re, &pml_im, nullptr, nullptr, mat_op, PMLFilter::FREQUENCY_DEPENDENT,
-                  omega, ExtraSystemPMLPencil(omega));
-  return AssemblePMLOperator(GetNDSpace(), nd_dbc_tdof_lists.back(), pml_re, pml_im,
-                             diag_policy);
 }
 
 template <OperatorType OperType>
@@ -1590,16 +1467,14 @@ SpaceOperator::SampleModalCorrectionVectors(int port_idx, std::complex<double> o
 
 std::unique_ptr<Operator> SpaceOperator::GetInnerProductMatrix(double a0, double a2,
                                                                const ComplexOperator *K,
-                                                               const ComplexOperator *M,
-                                                               double omega)
+                                                               const ComplexOperator *M)
 {
   if (mat_op.HasPML())
   {
     // The real parts of the PML tensors are not positive definite (multiple stretched
-    // directions in the edge and corner regions of the layer), and the frequency-dependent
-    // PML terms are not in K or M. Instead, assemble the matrix with the PML tensors of the
-    // magnitudes of the stretch factors, as for the real-valued preconditioner
-    // approximation.
+    // directions in the edge and corner regions of the layer). Instead, assemble the matrix
+    // with the PML tensors of the magnitudes of the stretch factors, as for the real-valued
+    // preconditioner approximation.
     MFEM_VERIFY(a0 >= 0.0 && a2 >= 0.0,
                 "Invalid coefficients for the inner product matrix with PML!");
     MaterialPropertyCoefficient df(mat_op.MaxCeedAttribute()), f(mat_op.MaxCeedAttribute()),
@@ -1625,12 +1500,7 @@ std::unique_ptr<Operator> SpaceOperator::GetInnerProductMatrix(double a0, double
     }
     std::vector<PMLIntegrator> pml;
     const PMLPencil c = {.a0 = c0, .a2 = c2, .a2_floquet = c2};
-    AppendPMLPencil(pml, nullptr, nullptr, nullptr, mat_op, PMLFilter::STATIC, 0.0, c);
-    if (omega > 0.0)
-    {
-      AppendPMLPencil(pml, nullptr, nullptr, nullptr, mat_op,
-                      PMLFilter::FREQUENCY_DEPENDENT, omega, c);
-    }
+    AppendPMLPencil(pml, nullptr, nullptr, nullptr, mat_op, c);
     constexpr bool skip_zeros = false;
     auto b = AssembleOperator(GetNDSpace(), &df, &f, nullptr, &fb, nullptr, nullptr,
                               nullptr, skip_zeros, false, &pml);
@@ -1828,19 +1698,15 @@ void SpaceOperator::AssemblePreconditioner(
     AddImagPeriodicCoefficients(-a0.imag(), fpr);
   }
 
-  // PML terms mirror the system matrix A = a0 K + a1 C + a2 M + A2(a3): a static stretch
-  // with the prefactors of the corresponding bulk terms above, or a frequency-dependent
-  // stretch evaluated at ω = a3. The auxiliary space terms are the
-  // gradient subspace projections of the mass terms. Note that large PML conductivities
+  // PML terms mirror the system matrix A = a0 K + a1 C + a2 M, with the prefactors of the
+  // corresponding bulk terms above. The auxiliary space terms are the gradient subspace
+  // projections of the mass terms. Note that large PML conductivities
   // (σ / ω) can slow down the multigrid convergence: the imaginary parts of the PML tensors
   // change sign between the directions normal and tangential to the layer, which degrades
   // the effectiveness of the polynomial smoothers.
   std::vector<PMLIntegrator> pml_re, pml_im, aux_pml_re, aux_pml_im;
-  AppendPMLPencil(pml_re, &pml_im, &aux_pml_re, &aux_pml_im, mat_op, PMLFilter::STATIC, 0.0,
-                  {a0, a1, ShiftedMassCoefficient(a2, pc_mat_shifted), a2});
   AppendPMLPencil(pml_re, &pml_im, &aux_pml_re, &aux_pml_im, mat_op,
-                  PMLFilter::FREQUENCY_DEPENDENT, a3,
-                  ExtraSystemPMLPencil(a3, pc_mat_shifted));
+                  {a0, a1, ShiftedMassCoefficient(a2, pc_mat_shifted), a2});
 
   // A real-valued coarse solve factors the sum Ar + Ai of the real and imaginary parts of
   // the coarse-level operator of a multigrid hierarchy (see ComplexCoarseSolve), which is a
@@ -1855,11 +1721,8 @@ void SpaceOperator::AssemblePreconditioner(
   if (!complex_coarse_solve && mat_op.HasPML() && GetNDSpaces().GetNumLevels() > 1)
   {
     auto &[coarse_re, coarse_im] = coarse_pml.emplace();
-    AppendPMLPencil(coarse_re, &coarse_im, nullptr, nullptr, mat_op, PMLFilter::STATIC, 0.0,
-                    {a0, a1, ShiftedMassCoefficient(a2, pc_mat_shifted), a2}, true);
     AppendPMLPencil(coarse_re, &coarse_im, nullptr, nullptr, mat_op,
-                    PMLFilter::FREQUENCY_DEPENDENT, a3,
-                    ExtraSystemPMLPencil(a3, pc_mat_shifted), true);
+                    {a0, a1, ShiftedMassCoefficient(a2, pc_mat_shifted), a2}, true);
   }
 
   int empty[2] = {(dfr.empty() && fr.empty() && dfbr.empty() && fbr.empty() &&
@@ -1943,10 +1806,7 @@ void SpaceOperator::AssemblePreconditioner(
   std::vector<PMLIntegrator> pml, aux_pml;
   {
     const double a2r = pc_mat_shifted ? std::abs(a2.real()) : a2.real();
-    AppendPMLPencil(pml, nullptr, &aux_pml, nullptr, mat_op, PMLFilter::STATIC, 0.0,
-                    {a0.real(), 0.0, a2r, a2r});
-    AppendPMLPencil(pml, nullptr, &aux_pml, nullptr, mat_op, PMLFilter::FREQUENCY_DEPENDENT,
-                    a3, ExtraSystemPMLPencil(a3, pc_mat_shifted, pc_mat_shifted));
+    AppendPMLPencil(pml, nullptr, &aux_pml, nullptr, mat_op, {a0.real(), 0.0, a2r, a2r});
   }
 
   int empty = (dfr.empty() && fr.empty() && dfbr.empty() && fbr.empty() && frbr.empty() &&
@@ -2287,14 +2147,6 @@ void SpaceOperator::AddExtraSystemBdrCoefficients(
   wave_port_op.AddExtraSystemBdrCoefficients(omega, fbr, fbi);
 }
 
-bool SpaceOperator::HasExtraSystemBdrTerms() const
-{
-  // See AddExtraSystemBdrCoefficients.
-  return (farfield_op.GetOrder() > 1 && farfield_op.GetAttrList().Size() > 0) ||
-         surf_sigma_op.Size() > 0 || surf_rz_op.GetAttrList().Size() > 0 ||
-         wave_port_op.Size() > 0;
-}
-
 void SpaceOperator::AddRealPeriodicCoefficients(double coeff,
                                                 MaterialPropertyCoefficient &f)
 {
@@ -2611,9 +2463,9 @@ template std::unique_ptr<ComplexOperator>
 SpaceOperator::GetExtraSystemMatrix(double, Operator::DiagonalPolicy);
 
 template std::unique_ptr<Operator>
-SpaceOperator::GetExtraSystemMatrix(double, Operator::DiagonalPolicy, bool, bool);
+SpaceOperator::GetExtraSystemMatrix(double, Operator::DiagonalPolicy, bool);
 template std::unique_ptr<ComplexOperator>
-SpaceOperator::GetExtraSystemMatrix(double, Operator::DiagonalPolicy, bool, bool);
+SpaceOperator::GetExtraSystemMatrix(double, Operator::DiagonalPolicy, bool);
 
 template std::unique_ptr<Operator>
 SpaceOperator::GetWavePortBoundaryMassMatrix(int, Operator::DiagonalPolicy);

@@ -26,10 +26,9 @@ See the [developer notes on schema versioning](https://awslabs.github.io/palace/
     instead extrudes the PML from farfield boundaries of the mesh, for example in place of
     an absorbing boundary on a sphere: each face becomes a column of prisms or hexahedra
     along rays from a core point or segment, and the coordinates are stretched along the
-    rays. The stretch can be evaluated at a fixed reference frequency or at the solve
-    frequency (`"FrequencyDependent"`). For eigenmode simulations, the fraction of the field
-    energy of each mode in the PML regions is written to `eig.csv`, which identifies the
-    spurious modes of the layer. SchemaVer 4-3-0
+    rays. For eigenmode simulations, the fraction of the field energy of each mode in the PML
+    regions is written to `eig.csv`, which identifies the spurious modes of the layer.
+    SchemaVer 4-3-0
     [PR 1048](https://github.com/awslabs/palace/pull/1048).
 
 #### Interface Changes

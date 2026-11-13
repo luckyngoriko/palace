@@ -3,9 +3,8 @@
   // behind the PML: plane wave absorption by the PML at oblique incidence at 3 GHz. The
   // Floquet wave vector k_y = k₀ sin(θ) sets the angle of incidence θ.
   // θ = 45°, TM polarization, swept from 2.5 to 3.5 GHz with the adaptive fast frequency
-  // sweep. The frequency-dependent stretch keeps the PML absorbing over the band; its terms,
-  // which are not symmetric with the Floquet wave vector, are projected per frequency during
-  // the greedy sampling and fit with a rational function for the online sweep.
+  // sweep. The stretch is evaluated at the lowest frequency, so that the PML absorbs at
+  // least as much over the band.
   "Problem": {
     "Type": "Driven",
     "Verbose": 2,
@@ -42,8 +41,7 @@
           "+Z"
         ],
         "Thickness": 0.3,
-        "Order": 3,
-        "FrequencyDependent": true
+        "Order": 3
       }
     ]
   },

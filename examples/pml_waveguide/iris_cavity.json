@@ -3,9 +3,9 @@
   // and coupled through an inductive iris (a 5 mm thick wall with a 40 mm wide aperture) to an
   // output section terminated by a PML (see mesh/mesh.jl). Its TE101-like resonance at 1.778
   // GHz, with a Q of about 495 due to the radiation through the iris, does not depend on the
-  // PML: with a frequency-dependent stretch (iris_cavity_fd.json), or with other PML
-  // parameters, the eigenfrequency agrees to 1e-5 (real part) and 1e-2 (imaginary part).
-  // Static stretch at the target frequency (the default): the eigenvalue problem is linear.
+  // PML: with other PML parameters, the eigenfrequency agrees to 1e-5 (real part) and 1e-2
+  // (imaginary part). The stretch is evaluated at the target frequency (the default), so
+  // that the eigenvalue problem is linear.
   // The shift-and-invert linear systems are solved with geometric multigrid preconditioning,
   // with (by default) a sparse direct solve on the PML subdomain.
   "Problem":

@@ -18,13 +18,11 @@
 //                 μ̃⁻¹ = Jᵀ μ⁻¹ J / det(J) ,     ε̃ = det(J) J⁻¹ ε J⁻ᵀ ,
 // for general (anisotropic, lossy) background tensors μ⁻¹ and ε = ε' + i ε''. The Cartesian
 // stretch has J = S = diag(s_x, s_y, s_z), where (Palace e^{+iωt} time convention)
-//                       s_a(x, ω) = κ_a(x) + σ_a(x) / (α_a(x) + iω) ,
-// that is, μ̃⁻¹_ij = μ⁻¹_ij s_i s_j / (s_x s_y s_z) and ε̃_ij = ε_ij (s_x s_y s_z) / (s_i
-// s_j): for an isotropic background, the classic uniaxial PML tensors μ̃⁻¹_ii = μ⁻¹ s_i /
-// (s_j s_k), ε̃_ii = ε s_j s_k / s_i. The frequency ω is the complex solve
-// frequency for a frequency-dependent stretch (so that the stretch is the analytic
-// continuation for complex eigenfrequencies), or a fixed real reference frequency ω₀ for a
-// static stretch.
+//                       s_a(x) = κ_a(x) + σ_a(x) / (iω₀) ,
+// for the fixed reference frequency ω₀ of the static stretch, that is, μ̃⁻¹_ij = μ⁻¹_ij s_i
+// s_j / (s_x s_y s_z) and ε̃_ij = ε_ij (s_x s_y s_z) / (s_i s_j): for an isotropic
+// background, the classic uniaxial PML tensors μ̃⁻¹_ii = μ⁻¹ s_i / (s_j s_k), ε̃_ii = ε s_j
+// s_k / s_i.
 //
 // Context layout (array of CeedIntScalar):
 //
@@ -35,16 +33,14 @@
 //               replaced by their magnitudes (exact for a unit stretch)
 //     [2, 3]    (Re, Im) of the prefactor c for μ̃⁻¹ terms (curl-curl, Floquet)
 //     [4, 5]    (Re, Im) of the prefactor c for ε̃ terms (mass, diffusion)
-//     [6, 7]    (Re, Im) of the frequency ω of the stretch: the solve frequency for a
-//               frequency-dependent stretch, or the reference frequency ω₀ otherwise
-//     [8..16]   Floquet wave vector cross product matrix [k ×] (3 x 3, column-major)
+//     [6..14]   Floquet wave vector cross product matrix [k ×] (3 x 3, column-major)
 //   Stretch (PALACE_PML_STRETCH_SIZE entries) of the PML block of the integrator:
 //     [0]       polynomial grading order n
 //     [1..6]    inner interface coordinate of each face {-x, +x, -y, +y, -z, +z}
 //     [7..12]   layer thickness of each face (≤ 0 for inactive faces)
 //     [13..18]  σ_max of each face
 //     [19..21]  κ_max per axis
-//     [22..24]  α_max per axis
+//     [22]      reference frequency ω₀
 //   Attribute map (num_attr entries): background material index for each attribute, or -1
 //   for attributes outside of the PML regions.
 //   Background materials (PALACE_PML_BACKGROUND_SIZE entries each):
@@ -53,7 +49,7 @@
 //     [18..26]  Im{ε}
 //
 // The profile parameters are graded with depth d into the layer of thickness t on each face
-// as σ = σ_max (d/t)ⁿ, κ = 1 + (κ_max - 1)(d/t)ⁿ, α = α_max (d/t)ⁿ. The tensors T̂ of the
+// as σ = σ_max (d/t)ⁿ and κ = 1 + (κ_max - 1)(d/t)ⁿ. The tensors T̂ of the
 // magnitudes of the stretch factors use J with the stretch factors replaced by their
 // magnitudes.
 //
@@ -70,12 +66,13 @@
 // = 0, it is the Cartesian stretch of a face with normal n. For the tensors T̂, s and |x -
 // p| + ξ̃ - ξ in J̃ are replaced by their magnitudes. The extruded stretch section of the
 // context is:
-//     [25]      1 for an extruded stretch (the Cartesian entries above are then zero)
-//     [26..31]  end points of the core segment (a point if they are equal)
-//     [32..35]  layer thickness t, σ_max, κ_max, and α_max
+//     [23]      1 for an extruded stretch (the Cartesian entries [1..21] above are then
+//               zero)
+//     [24..29]  end points of the core segment (a point if they are equal)
+//     [30..32]  layer thickness t, σ_max, and κ_max
 
-#define PALACE_PML_HEADER_SIZE 17
-#define PALACE_PML_STRETCH_SIZE 36
+#define PALACE_PML_HEADER_SIZE 15
+#define PALACE_PML_STRETCH_SIZE 33
 #define PALACE_PML_BACKGROUND_SIZE 27
 
 enum
@@ -98,7 +95,7 @@ CEED_QFUNCTION_HELPER CeedInt PMLPart(const CeedIntScalar *ctx)
 
 CEED_QFUNCTION_HELPER const CeedIntScalar *PMLWaveVectorCross(const CeedIntScalar *ctx)
 {
-  return ctx + 8;
+  return ctx + 6;
 }
 
 // Return the background material data for the given (1-based) libCEED attribute, or a null
@@ -141,32 +138,17 @@ CEED_QFUNCTION_HELPER void PMLComplexDiv(CeedScalar ar, CeedScalar ai, CeedScala
   *ci = (ai * br - ar * bi) / den;
 }
 
-// Stretch factor s = κ + σ / (α + iω) at the normalized depth r ∈ [0, 1] into the layer,
-// for the frequency ω of the context.
+// Stretch factor s = κ + σ / (iω₀) at the normalized depth r ∈ [0, 1] into the layer.
 CEED_QFUNCTION_HELPER void PMLStretchFactor(const CeedIntScalar *ctx, CeedScalar r,
                                             CeedScalar sigma_max, CeedScalar kappa_max,
-                                            CeedScalar alpha_max, CeedScalar *s_re,
-                                            CeedScalar *s_im)
+                                            CeedScalar *s_re, CeedScalar *s_im)
 {
-  const CeedInt order = ctx[PALACE_PML_HEADER_SIZE].first;
-  const CeedScalar omega_re = ctx[6].second, omega_im = ctx[7].second;
+  const CeedIntScalar *p = ctx + PALACE_PML_HEADER_SIZE;
+  const CeedInt order = p[0].first;
+  const CeedScalar omega = p[22].second;
   const CeedScalar shape = PMLIntPow((r < 1.0) ? r : 1.0, order);
-  const CeedScalar sigma = sigma_max * shape;
-  const CeedScalar kappa = 1.0 + (kappa_max - 1.0) * shape;
-  const CeedScalar alpha = alpha_max * shape;
-
-  // σ / (α + iω) with α + iω = (α - Im{ω}) + i Re{ω}. The degenerate α = ω = 0 case falls
-  // back to the real coordinate scaling κ.
-  const CeedScalar den_re = alpha - omega_im, den_im = omega_re;
-  *s_re = kappa;
-  *s_im = 0.0;
-  if (den_re != 0.0 || den_im != 0.0)
-  {
-    CeedScalar q_re, q_im;
-    PMLComplexDiv(sigma, 0.0, den_re, den_im, &q_re, &q_im);
-    *s_re += q_re;
-    *s_im = q_im;
-  }
+  *s_re = 1.0 + (kappa_max - 1.0) * shape;
+  *s_im = -sigma_max * shape / omega;
 }
 
 // Compute the complex stretch factors s_a for each axis at the physical point x.
@@ -195,8 +177,7 @@ CEED_QFUNCTION_HELPER void PMLStretch(const CeedIntScalar *ctx, const CeedScalar
     {
       continue;
     }
-    PMLStretchFactor(ctx, r, sigma_max, p[19 + a].second, p[22 + a].second, &s_re[a],
-                     &s_im[a]);
+    PMLStretchFactor(ctx, r, sigma_max, p[19 + a].second, &s_re[a], &s_im[a]);
   }
 }
 
@@ -352,55 +333,23 @@ CEED_QFUNCTION_HELPER void PMLCartesianJacobian(const CeedIntScalar *ctx,
 // Whether the stretch of the context is that of an extruded PML.
 CEED_QFUNCTION_HELPER bool PMLIsExtruded(const CeedIntScalar *ctx)
 {
-  return ctx[PALACE_PML_HEADER_SIZE + 25].first == 1;
+  return ctx[PALACE_PML_HEADER_SIZE + 23].first == 1;
 }
 
-// ξ̃ - ξ = ∫₀^ξ (s - 1) dξ' for the extruded stretch: in closed form without the complex
-// frequency shift, and otherwise with 8-point Gauss-Legendre quadrature. Depths beyond the
-// layer (from rounding) have the stretch of its outer edge.
+// ξ̃ - ξ = ∫₀^ξ (s - 1) dξ' for the extruded stretch. Depths beyond the layer (from
+// rounding) have the stretch of its outer edge.
 CEED_QFUNCTION_HELPER void PMLStretchIntegral(const CeedIntScalar *ctx, CeedScalar xi,
                                               CeedScalar *re, CeedScalar *im)
 {
   const CeedIntScalar *p = ctx + PALACE_PML_HEADER_SIZE;
   const CeedInt order = p[0].first;
-  const CeedScalar t = p[32].second, sigma_max = p[33].second, kappa_max = p[34].second,
-                   alpha_max = p[35].second;
-  const CeedScalar omega_re = ctx[6].second, omega_im = ctx[7].second;
+  const CeedScalar omega = p[22].second, t = p[30].second, sigma_max = p[31].second,
+                   kappa_max = p[32].second;
   const CeedScalar r = (xi <= 0.0) ? 0.0 : (xi < t) ? xi / t : 1.0;
   const CeedScalar beyond = (xi > t) ? xi - t : 0.0;
   const CeedScalar m = t * PMLIntPow(r, order + 1) / (order + 1) + beyond;  // ∫ (ξ'/t)ⁿ
   *re = (kappa_max - 1.0) * m;
-  *im = 0.0;
-  CeedScalar q_re = 0.0, q_im = 0.0;
-  if (alpha_max == 0.0)
-  {
-    if (omega_re != 0.0 || omega_im != 0.0)
-    {
-      PMLComplexDiv(sigma_max * m, 0.0, -omega_im, omega_re, &q_re, &q_im);
-    }
-  }
-  else
-  {
-    const CeedScalar gl_x[4] = {0.1834346424956498, 0.5255324099163290, 0.7966664774136267,
-                                0.9602898564975363};
-    const CeedScalar gl_w[4] = {0.3626837833783620, 0.3137066458778873, 0.2223810344533745,
-                                0.1012285362903763};
-    for (CeedInt k = 0; k < 8; k++)
-    {
-      const CeedScalar u = 0.5 * r * (1.0 + ((k < 4) ? -gl_x[k] : gl_x[k - 4]));
-      const CeedScalar w = 0.5 * r * t * gl_w[(k < 4) ? k : k - 4];
-      CeedScalar s_re, s_im;
-      PMLStretchFactor(ctx, u, sigma_max, 1.0, alpha_max, &s_re, &s_im);
-      q_re += w * (s_re - 1.0);
-      q_im += w * s_im;
-    }
-    CeedScalar s_re, s_im;
-    PMLStretchFactor(ctx, 1.0, sigma_max, 1.0, alpha_max, &s_re, &s_im);
-    q_re += beyond * (s_re - 1.0);
-    q_im += beyond * s_im;
-  }
-  *re += q_re;
-  *im += q_im;
+  *im = -sigma_max * m / omega;
 }
 
 // Unit vector d from the closest point p of x on the core segment of the extruded stretch,
@@ -408,7 +357,7 @@ CEED_QFUNCTION_HELPER void PMLStretchIntegral(const CeedIntScalar *ctx, CeedScal
 CEED_QFUNCTION_HELPER void PMLRay(const CeedIntScalar *ctx, const CeedScalar x[3],
                                   CeedScalar d[3], CeedScalar *dist, CeedScalar grad_d[9])
 {
-  const CeedIntScalar *a = ctx + PALACE_PML_HEADER_SIZE + 26, *b = a + 3;
+  const CeedIntScalar *a = ctx + PALACE_PML_HEADER_SIZE + 24, *b = a + 3;
   CeedScalar e[3], ee = 0.0, t = 0.0;
   for (CeedInt c = 0; c < 3; c++)
   {
@@ -446,10 +395,10 @@ CEED_QFUNCTION_HELPER void PMLExtrudedJacobian(const CeedIntScalar *ctx,
                                                CeedScalar J_re[9], CeedScalar J_im[9])
 {
   const CeedIntScalar *p = ctx + PALACE_PML_HEADER_SIZE;
-  const CeedScalar t = p[32].second;
+  const CeedScalar t = p[30].second;
   CeedScalar s_re, s_im, D_re, D_im, d[3], dist, grad_d[9];
-  PMLStretchFactor(ctx, (xi > 0.0) ? xi / t : 0.0, p[33].second, p[34].second, p[35].second,
-                   &s_re, &s_im);
+  PMLStretchFactor(ctx, (xi > 0.0) ? xi / t : 0.0, p[31].second, p[32].second, &s_re,
+                   &s_im);
   PMLStretchIntegral(ctx, xi, &D_re, &D_im);
   PMLRay(ctx, x, d, &dist, grad_d);
   if (magnitude)
