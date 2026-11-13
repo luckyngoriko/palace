@@ -28,7 +28,10 @@ See the [developer notes on schema versioning](https://awslabs.github.io/palace/
     along rays from a core point or segment, and the coordinates are stretched along the
     rays. For eigenmode simulations, the fraction of the field energy of each mode in the PML
     regions is written to `eig.csv`, which identifies the spurious modes of the layer.
-    SchemaVer 4-3-0
+    The multigrid preconditioner is complemented by a sparse direct solve of the PML
+    regions (`Solver.Linear.PMLSubdomainSolver`); with SuperLU_DIST, the accuracy of its
+    factorization is checked, and an inaccurate factorization is repeated with tiny pivot
+    replacement and iterative refinement. SchemaVer 4-3-0
     [PR 1048](https://github.com/awslabs/palace/pull/1048).
 
 #### Interface Changes
@@ -50,10 +53,6 @@ See the [developer notes on schema versioning](https://awslabs.github.io/palace/
     L⁻¹, R⁻¹, and C matrices which are not symmetric: the Floquet terms make the system
     matrices Hermitian rather than complex symmetric. Such configurations must be updated.
     [PR 1112](https://github.com/awslabs/palace/pull/1112).
-  - Eigenmode simulations now postprocess the converged modes, with a warning, when fewer than
-    `Solver.Eigenmode.N` modes converge within `Solver.Eigenmode.MaxIts` iterations,
-    instead of aborting without output.
-    [PR 1048](https://github.com/awslabs/palace/pull/1048).
 
 #### Performance Improvements
 
@@ -147,6 +146,10 @@ See the [developer notes on schema versioning](https://awslabs.github.io/palace/
 
 #### Bug Fixes
 
+  - With a Floquet wave vector and `Solver.Linear.PCMatShifted`, the preconditioner matrix
+    is now unsymmetric for the sparse direct solvers, which were told that it is symmetric
+    positive definite: with MUMPS, the linear solver did not converge and gave wrong
+    S-parameters. [PR 1048](https://github.com/awslabs/palace/pull/1048).
   - Added a STRUMPACK patch for
     [pghysels/STRUMPACK#164](https://github.com/pghysels/STRUMPACK/pull/164), which fixes
     the solves after the matrix values change when STRUMPACK compression is enabled

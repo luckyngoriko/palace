@@ -4,7 +4,6 @@
 #include "errorestimator.hpp"
 
 #include <algorithm>
-#include <cmath>
 #include <limits>
 #include "fem/bilinearform.hpp"
 #include "fem/integrator.hpp"
@@ -377,9 +376,8 @@ GradFluxErrorEstimator<VecType>::GradFluxErrorEstimator(
       CeedBasis rt_basis = rt_fespace.GetCeedBasis(ceed, geom);
 
       // Construct coefficient for discontinuous flux, then smooth flux.
-      const auto mat_epsilon = mat_op.GetPermittivityReal();
-      auto mat_sqrtepsilon = linalg::MatrixSqrt(mat_epsilon);
-      auto mat_invsqrtepsilon = linalg::MatrixPow(mat_epsilon, -0.5);
+      auto mat_sqrtepsilon = linalg::MatrixSqrt(mat_op.GetPermittivityReal());
+      auto mat_invsqrtepsilon = linalg::MatrixPow(mat_op.GetPermittivityReal(), -0.5);
       MaterialPropertyCoefficient sqrtepsilon_func(mat_op.GetAttributeToMaterial(),
                                                    mat_sqrtepsilon);
       MaterialPropertyCoefficient invsqrtepsilon_func(mat_op.GetAttributeToMaterial(),
@@ -509,7 +507,8 @@ CurlFluxErrorEstimator<VecType>::CurlFluxErrorEstimator(
       // Construct coefficient for discontinuous flux, then smooth flux.
       // In 2D, the curl is scalar so we use scalar (1x1) √μ⁻¹ and √μ coefficients.
       const bool scalar_curl = (mesh.Dimension() == 2);
-      const auto muinv_tensor = mat_op.GetCurlCurlInvPermeability();
+      const auto &muinv_tensor =
+          scalar_curl ? mat_op.GetCurlCurlInvPermeability() : mat_op.GetInvPermeability();
       auto mat_invsqrtmu = linalg::MatrixSqrt(muinv_tensor);
       auto mat_sqrtmu = linalg::MatrixPow(muinv_tensor, -0.5);
       MaterialPropertyCoefficient invsqrtmu_func(mat_op.GetAttributeToMaterial(),

@@ -258,8 +258,7 @@ solver, so that it is best to request few modes
 ([`config["Solver"]["Eigenmode"]["N"]`](../config/reference.md#config-solver-eigenmode-n))
 with a `"Target"` close to the modes of interest and a moderate `"Tol"`. When more modes are
 needed, the maximum number of iterations of the eigenvalue solver (`"MaxIts"`) must allow for
-the many restarts which such clusters require: if fewer than `"N"` modes converge within
-`"MaxIts"` iterations, the converged modes are written, with a warning.
+the many restarts which such clusters require.
 
 The total field energies written to `domain-E.csv` exclude the PML regions. In the PML
 regions, the field energies of the domains of
@@ -276,7 +275,11 @@ PML can cause convergence difficulties in iterative linear solvers. By default,
 the multigrid preconditioner is therefore complemented by a sparse direct solve of the
 PML regions, which restores the convergence of the multigrid preconditioner without PML.
 Simulations with PML regions therefore require a sparse direct solver (SuperLU_DIST,
-STRUMPACK, or MUMPS) and AMS is not supported with PML regions.
+STRUMPACK, or MUMPS) and AMS is not supported with PML regions. The static pivoting of
+SuperLU_DIST can be unstable for the indefinite matrix of the PML regions, so the accuracy
+of its factorization is checked: an inaccurate factorization is repeated with tiny pivot
+replacement and iterative refinement, and a warning suggests STRUMPACK or MUMPS if it is
+still inaccurate.
 
 Sample configurations are provided in the
 [`examples/pml_waveguide`](https://github.com/awslabs/palace/blob/main/examples/pml_waveguide),
