@@ -2071,6 +2071,8 @@ void Nondimensionalize(const Units &units, PMLData &data)
       c /= units.GetMeshLengthRelativeScale();
     }
   }
+  data.extrusion.distance /= units.GetMeshLengthRelativeScale();
+  data.extrusion.plane[3] /= units.GetMeshLengthRelativeScale();
   // f₀ [GHz] → angular nondimensional frequency ω₀ = 2π f₀, the convention of the
   // frequencies of the solvers and of the stretch formulas.
   if (data.reference_frequency > 0.0)
