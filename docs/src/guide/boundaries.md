@@ -376,6 +376,14 @@ frequency for driven simulations, or the target frequency for eigenmode simulati
 keeps the system matrices independent of frequency, and so eigenmode problems remain
 linear, while the absorption in the layer grows with frequency.
 
+The absorption across each element of the layer grows with frequency in the same way, so
+over a wide sweep the layer becomes too coarse for the wave at the upper frequencies, and
+reflects more of it. For a vacuum cell at normal incidence, swept from 0.3 to 3 GHz, a layer
+of 8 third-order elements that is ``\lambda / 10`` thick at 0.3 GHz reflects -109 dB at 0.3
+GHz and -70 dB at 3 GHz, while 16 elements in the same thickness stay below -110 dB. More
+layers reduce this reflection, and so does a `"ReferenceFrequency"` nearer the middle of the
+sweep, at the cost of less absorption at the lower frequencies.
+
 ### Eigenmode simulations and postprocessing with PML regions
 
 In eigenmode simulations, the PML adds modes which are not those of the physical problem:
