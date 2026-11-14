@@ -366,6 +366,11 @@ a distance of at least about ``\lambda / 2\pi`` from the radiating structures, a
 lowest frequency of interest. Otherwise, a weaker absorption (a larger `"ReflectionTarget"`)
 reduces the spurious losses, at the cost of larger reflections of the propagating waves.
 
+The PML also assumes that waves in the layer carry their phase and their energy the same way
+along the stretch direction. Where the two point opposite ways, as for the backward waves of
+some anisotropic or loaded media, the stretch amplifies the wave instead of absorbing it,
+and *Palace* does not detect this.
+
 The stretch factors are evaluated at a fixed `"ReferenceFrequency"`, by default the lowest
 frequency for driven simulations, or the target frequency for eigenmode simulations. This
 keeps the system matrices independent of frequency, and so eigenmode problems remain
